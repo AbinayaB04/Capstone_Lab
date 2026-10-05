@@ -4,7 +4,9 @@ import os
 import datetime
 from database.mongo_manager import verify_login
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "super-secret-capstone-key-2026")
+JWT_SECRET = os.environ.get("JWT_SECRET")
+if not JWT_SECRET:
+    raise ValueError("CRITICAL SECURITY ERROR: JWT_SECRET environment variable is not set!")
 
 def create_jwt(user_data):
     payload = {

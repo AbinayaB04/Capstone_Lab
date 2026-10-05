@@ -7,7 +7,7 @@ app = FastAPI(title="StudyMate API", description="Backend API for StudyMate AI")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, restrict this to the Streamlit origin
+    allow_origins=["http://localhost:8501"], # Restrict to frontend origin
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
