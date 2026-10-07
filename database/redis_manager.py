@@ -97,3 +97,18 @@ def set_cache(query_vector: list, query_text: str, course_code: str, answer: str
         client.expire(key, 2592000)
     except Exception as e:
         print(f"Redis save error: {e}")
+
+def blacklist_token(token: str, expires_in: int):
+    client = get_redis_client()
+    try:
+        client.set(f"blacklist:{token}", "true", ex=expires_in)
+    except Exception as e:
+        print(f"Redis blacklist error: {e}")
+
+def is_token_blacklisted(token: str) -> bool:
+    client = get_redis_client()
+    try:
+        return client.exists(f"blacklist:{token}") > 0
+    except Exception as e:
+        print(f"Redis check blacklist error: {e}")
+        return False

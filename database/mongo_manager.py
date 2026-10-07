@@ -23,6 +23,17 @@ branches_col = db['branches']
 courses_col = db['courses']
 documents_col = db['documents']
 chat_sessions_col = db['chat_sessions']
+audit_logs_col = db['audit_logs']
+
+def log_audit_action(username: str, action_type: str, target: str, details: str = ""):
+    import datetime
+    audit_logs_col.insert_one({
+        "timestamp": datetime.datetime.now(datetime.timezone.utc),
+        "username": username,
+        "action_type": action_type,
+        "target": target,
+        "details": details
+    })
 
 def init_mongo_db():
     """Seed the database with initial multi-tenant context mapping if empty."""
@@ -87,15 +98,24 @@ def init_mongo_db():
         print("MongoDB Seeding Complete.")
 
 def verify_login(username, password):
-    user = users_col.find_one({"username": username})
+    import re
+    user = users_col.find_one({"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
     if user:
         if user.get("locked_out", False):
             return False, "Account locked out due to too many failed attempts. Contact admin."
             
         if "password_hash" in user:
             import bcrypt
+            import datetime
             try:
                 if bcrypt.checkpw(password.encode('utf-8'), user["password_hash"].encode('utf-8')):
+                    # Check password expiration (90 days)
+                    last_change = user.get("last_password_change")
+                    if last_change:
+                        if isinstance(last_change, datetime.datetime):
+                            if (datetime.datetime.now(datetime.timezone.utc) - last_change.replace(tzinfo=datetime.timezone.utc)).days > 90:
+                                return False, "Password expired. Please contact admin to reset."
+                    
                     users_col.update_one({"username": username}, {"$set": {"failed_attempts": 0}})
                     return True, user
                 else:
@@ -111,14 +131,45 @@ def verify_login(username, password):
 
 def update_password(username, new_password):
     import bcrypt
+    import datetime
+    import re
     try:
+        query = {"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}}
+        user = users_col.find_one(query)
+        if user:
+            history = user.get("password_history", [])
+            for old_hash in history:
+                if bcrypt.checkpw(new_password.encode('utf-8'), old_hash.encode('utf-8')):
+                    return False # Password reused
+                    
         salt = bcrypt.gensalt()
         hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), salt).decode('utf-8')
-        users_col.update_one({"username": username}, {"$set": {"password_hash": hashed_password}})
+        
+        # Keep last 3 passwords
+        new_history = user.get("password_history", []) if user else []
+        new_history.insert(0, hashed_password)
+        new_history = new_history[:3]
+        
+        users_col.update_one(
+            query, 
+            {"$set": {
+                "password_hash": hashed_password,
+                "password_history": new_history,
+                "last_password_change": datetime.datetime.now(datetime.timezone.utc)
+            }}
+        )
         return True
     except Exception as e:
         print(f"Error updating password: {e}")
         return False
+
+def verify_dob_for_reset(username, dob):
+    import re
+    # Use case-insensitive search for username
+    user = users_col.find_one({"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
+    if user and user.get("dob") == dob:
+        return True
+    return False
 
 def get_user_profile(username):
     return users_col.find_one({"username": username})
@@ -148,7 +199,9 @@ def add_user(name, user_id, role, dob_str, department_id, branch_id, semester, p
             "dob": dob_str,
             "department_id": department_id,
             "branch_id": branch_id,
-            "semester": semester
+            "semester": semester,
+            "password_history": [hashed_pw],
+            "last_password_change": datetime.datetime.now(datetime.timezone.utc)
         })
         return True, "Success"
     except Exception as e:

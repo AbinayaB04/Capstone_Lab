@@ -22,24 +22,14 @@ def main():
     # Inject CSS styles
     inject_custom_css()
     
+    from auth.session_manager import init_session_state, check_idle_timeout
+    
     # Initialize session state variables
     init_session_state()
     
-    import time
-    SESSION_TIMEOUT_SECONDS = 300 # 5 minutes
-    
     if st.session_state["logged_in"]:
-        current_time = time.time()
-        time_elapsed = current_time - st.session_state.get("last_activity", current_time)
-        
-        if time_elapsed > SESSION_TIMEOUT_SECONDS:
-            from auth.session_manager import logout_user
-            logout_user()
-            st.session_state["session_expired"] = True
+        if not check_idle_timeout(timeout_minutes=15):
             st.rerun()
-            
-        # Update last activity timestamp on every interaction
-        st.session_state["last_activity"] = current_time
         
     # Route based on login status
     if not st.session_state["logged_in"]:

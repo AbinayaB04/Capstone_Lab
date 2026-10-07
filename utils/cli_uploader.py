@@ -65,13 +65,14 @@ def upload_local_document(file_path, course_code, uploader_username="admin_cli")
     print("🧠 Extracting text and generating Vector Embeddings for ChromaDB...")
     chunks = extract_and_chunk_pdf(pdf_bytes, filename=filename)
     
-    for i, chunk in enumerate(chunks):
+    for i, (chunk, source) in enumerate(chunks):
         chunk_id = f"{file_id}_chunk_{i}"
         metadata = {
             "department_id": str(department_id),
             "branch_id": str(branch_id),
             "semester": int(semester),
-            "course_code": str(course_code)
+            "course_code": str(course_code),
+            "source": source
         }
         insert_document_chunk(chunk_id, chunk, metadata)
         

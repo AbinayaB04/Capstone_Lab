@@ -89,3 +89,34 @@ async def delete_doc(doc_id: str):
     if db_delete_document(doc_id):
         return {"message": "Document deleted successfully"}
     raise HTTPException(status_code=404, detail="Document not found or could not be deleted")
+
+def process_sync_background():
+    from database.mongo_manager import documents_col
+    docs = list(documents_col.find({}))
+    for doc in docs:
+        try:
+            grid_out = fs.get(doc['gridfs_id'])
+            file_bytes = grid_out.read()
+            
+            chunks = extract_and_chunk_pdf(file_bytes, filename=doc['filename'])
+            if not chunks:
+                continue
+                
+            for i, (chunk, source) in enumerate(chunks):
+                chunk_id = f"{doc['gridfs_id']}_chunk_{i}"
+                metadata = {
+                    "department_id": str(doc.get('department_id', '')),
+                    "branch_id": str(doc.get('branch_id', '')),
+                    "semester": int(doc.get('semester', 0)),
+                    "course_code": str(doc.get('course_code', '')),
+                    "source": str(source),
+                    "file_id": str(doc['gridfs_id'])
+                }
+                insert_document_chunk(chunk_id, chunk, metadata)
+        except Exception as e:
+            print(f"Sync error for {doc.get('filename')}: {e}")
+
+@router.post("/sync-chroma")
+def sync_chroma_db(background_tasks: BackgroundTasks):
+    background_tasks.add_task(process_sync_background)
+    return {"message": "Sync started in background."}

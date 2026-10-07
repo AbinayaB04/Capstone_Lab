@@ -1,6 +1,7 @@
 class RBACManager:
     ROLES = {
         "admin": ["manage_users", "manage_departments", "manage_courses"],
+        "department_admin": ["manage_courses", "upload_materials", "view_materials", "delete_materials"],
         "staff": ["upload_materials", "view_materials", "delete_materials"],
         "student": ["view_materials", "download_materials", "ask_ai"]
     }

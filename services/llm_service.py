@@ -175,27 +175,25 @@ User Question: {query}
             except Exception as e:
                 return f"❌ Dual-Mesh Failure (Both Gemini & Groq failed): {str(e)}"
                 
-        return "❌ Primary LLM (Gemini) failed and no Groq fallback key was found in `.env`."
-
-def generate_exam(course_code, department_id, branch_id):
-    """Generates a 5-question JSON multiple choice quiz based on course context."""
-    from database.vector_manager import search_documents
-    context = search_documents("Key concepts and definitions", department_id, branch_id, course_code, n_results=5)
-    
-    if not context or not context.get("documents") or len(context["documents"][0]) == 0:
-        return None
+    def generate_exam(self, course_code, department_id, branch_id, num_questions=5, difficulty="medium"):
+        """Generates a JSON multiple choice quiz based on course context."""
+        from database.vector_manager import search_documents
+        context = search_documents("Key concepts and definitions", department_id, branch_id, course_code, n_results=5)
         
-    # Limit context to 20,000 characters to prevent API token limits
-    formatted_context = ""
-    MAX_EXAM_CHARS = 20000
-    for chunk in context["documents"][0]:
-        if len(formatted_context) + len(chunk) > MAX_EXAM_CHARS:
-            formatted_context += chunk[:MAX_EXAM_CHARS - len(formatted_context)] + "... [TRUNCATED]"
-            break
-        formatted_context += chunk + "\n\n"
-        
-    prompt = f"""
-You are an expert professor. Based ONLY on the following textbook context, generate a 5-question multiple choice quiz.
+        if not context or not context.get("documents") or len(context["documents"][0]) == 0:
+            return None
+            
+        # Limit context to 20,000 characters to prevent API token limits
+        formatted_context = ""
+        MAX_EXAM_CHARS = 20000
+        for chunk in context["documents"][0]:
+            if len(formatted_context) + len(chunk) > MAX_EXAM_CHARS:
+                formatted_context += chunk[:MAX_EXAM_CHARS - len(formatted_context)] + "... [TRUNCATED]"
+                break
+            formatted_context += chunk + "\n\n"
+            
+        prompt = f"""
+You are an expert professor. Based ONLY on the following textbook context, generate a {num_questions}-question multiple choice quiz at a {difficulty} difficulty level.
 The quiz MUST be returned in raw JSON format exactly like this, without any markdown formatting or extra text:
 [
   {{
@@ -208,19 +206,18 @@ The quiz MUST be returned in raw JSON format exactly like this, without any mark
 Context:
 {formatted_context}
 """
-    
-    engine = AIEngine()
-    # Skip chat history for exam generation
-    response = engine.generate_response(prompt)
-    
-    import json
-    try:
-        json_str = response.strip()
-        if "```json" in json_str:
-            json_str = json_str.split("```json")[1].split("```")[0]
-        elif "```" in json_str:
-            json_str = json_str.split("```")[1].split("```")[0]
-        return json.loads(json_str.strip())
-    except Exception as e:
-        print(f"Failed to parse exam JSON: {e}\nRaw response: {response}")
-        return None
+        
+        # Skip chat history for exam generation
+        response = self.generate_response(prompt)
+        
+        import json
+        try:
+            json_str = response.strip()
+            if "```json" in json_str:
+                json_str = json_str.split("```json")[1].split("```")[0]
+            elif "```" in json_str:
+                json_str = json_str.split("```")[1].split("```")[0]
+            return json.loads(json_str.strip())
+        except Exception as e:
+            print(f"Failed to parse exam JSON: {e}\nRaw response: {response}")
+            return None

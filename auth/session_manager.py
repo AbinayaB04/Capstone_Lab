@@ -43,6 +43,22 @@ def init_session_state():
         
     if "session_expired" not in st.session_state:
         st.session_state["session_expired"] = False
+        
+def check_idle_timeout(timeout_minutes=30):
+    """Check if the user has been idle for too long."""
+    import time
+    if st.session_state.get("logged_in", False):
+        current_time = time.time()
+        last_activity = st.session_state.get("last_activity", current_time)
+        
+        if (current_time - last_activity) > (timeout_minutes * 60):
+            logout_user()
+            st.session_state["session_expired"] = True
+            st.warning("Session expired due to inactivity.")
+            return False
+            
+        st.session_state["last_activity"] = current_time
+    return True
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 import requests
@@ -58,7 +74,10 @@ def login_user(username, password=None, role=None):
                 data = response.json()
                 st.session_state["logged_in"] = True
                 st.session_state["jwt_token"] = data["token"]
+                st.session_state["refresh_token"] = data.get("refresh_token")
                 st.session_state["user"] = data["user"]
+                import time
+                st.session_state["last_activity"] = time.time()
                 return True, "Success"
             else:
                 return False, response.json().get("detail", "Login failed")
@@ -67,11 +86,24 @@ def login_user(username, password=None, role=None):
     return False, "Password Required."
     
 def logout_user():
-    """Clear session state variables related to user."""
+    """Clear session state variables related to user and call backend to blacklist token."""
+    token = st.session_state.get("jwt_token")
+    if token:
+        try:
+            requests.post(
+                f"{API_BASE_URL}/auth/logout",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5
+            )
+        except:
+            pass # Fail silently if backend is unreachable during logout
+            
     st.session_state["logged_in"] = False
     st.session_state["user"] = None
     if "jwt_token" in st.session_state:
         del st.session_state["jwt_token"]
+    if "refresh_token" in st.session_state:
+        del st.session_state["refresh_token"]
     if "last_activity" in st.session_state:
         del st.session_state["last_activity"]
 

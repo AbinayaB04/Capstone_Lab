@@ -427,10 +427,42 @@ def render_student_view():
         user_branch_id = user_profile.get("branch_id")
         user_semester = user_profile.get("semester")
         
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            branches = []
+            if user_dept_id:
+                try:
+                    branches = get_branches_by_department(ObjectId(user_dept_id))
+                except:
+                    pass
+            branch_options = {str(b["_id"]): b["branch_name"] for b in branches}
+            default_branch_index = 0
+            if user_branch_id and str(user_branch_id) in branch_options:
+                default_branch_index = list(branch_options.keys()).index(str(user_branch_id))
+            
+            selected_branch_id = st.selectbox(
+                "Select Branch", 
+                options=list(branch_options.keys()), 
+                format_func=lambda x: branch_options[x], 
+                index=default_branch_index if branch_options else 0, 
+                key="pe_branch_select"
+            )
+            
+        with col2:
+            semesters = [1, 2, 3, 4, 5, 6, 7, 8]
+            default_sem_index = semesters.index(int(user_semester)) if user_semester and int(user_semester) in semesters else 0
+            selected_semester = st.selectbox(
+                "Select Semester", 
+                options=semesters, 
+                index=default_sem_index, 
+                key="pe_sem_select"
+            )
+            
         courses = []
-        if user_branch_id and user_semester:
+        if selected_branch_id and selected_semester:
             try:
-                courses = get_courses_by_branch_and_sem(ObjectId(user_branch_id), int(user_semester))
+                courses = get_courses_by_branch_and_sem(ObjectId(selected_branch_id), int(selected_semester))
             except:
                 pass
         course_options = {c["course_code"]: c["course_name"] for c in courses}
@@ -442,7 +474,7 @@ def render_student_view():
         selected_course = st.selectbox(
             "Select Course to generate quiz:",
             options=list(course_options.keys()),
-            format_func=lambda x: course_options[x]
+            format_func=lambda x: f"{x}: {course_options[x]}"
         )
 
         
@@ -454,7 +486,7 @@ def render_student_view():
                     payload = {
                         "course_code": selected_course,
                         "department_id": str(user_dept_id),
-                        "branch_id": str(user_branch_id)
+                        "branch_id": str(selected_branch_id)
                     }
                     res = requests.post(f"{API_BASE_URL}/chat/generate-exam", json=payload)
                     if res.status_code == 200:
