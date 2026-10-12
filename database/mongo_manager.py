@@ -24,6 +24,7 @@ courses_col = db['courses']
 documents_col = db['documents']
 chat_sessions_col = db['chat_sessions']
 audit_logs_col = db['audit_logs']
+quiz_attempts_col = db['quiz_attempts']
 
 def log_audit_action(username: str, action_type: str, target: str, details: str = ""):
     import datetime
@@ -246,22 +247,25 @@ def get_documents_by_course(course_code):
 
 def delete_document(doc_id):
     from bson.objectid import ObjectId
-    doc = documents_col.find_one({"_id": ObjectId(doc_id)})
-    if doc:
-        try:
-            fs.delete(doc["gridfs_id"])
-        except:
-            pass
-            
-        from database.vector_manager import get_collection
-        collection = get_collection()
-        try:
-            collection.delete(where={"file_id": str(doc["gridfs_id"])})
-        except Exception as e:
-            print(f"Error deleting from ChromaDB: {e}")
-            
-        documents_col.delete_one({"_id": ObjectId(doc_id)})
-        return True
+    try:
+        doc = documents_col.find_one({"_id": ObjectId(doc_id)})
+        if doc:
+            gridfs_id = doc.get("gridfs_id")
+            if gridfs_id:
+                try:
+                    fs.delete(gridfs_id)
+                except Exception as fe:
+                    print(f"GridFS delete notice: {fe}")
+                try:
+                    from database.vector_manager import delete_document_chunks_by_file_id
+                    delete_document_chunks_by_file_id(str(gridfs_id))
+                except Exception as ve:
+                    print(f"ChromaDB delete notice: {ve}")
+                    
+            documents_col.delete_one({"_id": ObjectId(doc_id)})
+            return True
+    except Exception as e:
+        print(f"Error in delete_document: {e}")
     return False
 
 def get_file_from_gridfs(file_id):
@@ -326,5 +330,143 @@ def delete_chat_session(session_id):
     except:
         pass
 
+# --- Quiz Attempts Persistence ---
+def record_quiz_attempt(username, course_code, branch_id=None, semester=None, score=0, total_questions=0, difficulty="medium", user_answers=None, quiz_details=None):
+    """Saves student quiz attempt and results."""
+    import datetime
+    attempt = {
+        "username": username,
+        "course_code": course_code,
+        "branch_id": str(branch_id) if branch_id else None,
+        "semester": int(semester) if semester else None,
+        "score": score,
+        "total_questions": total_questions,
+        "percentage": round((score / total_questions) * 100, 1) if total_questions > 0 else 0.0,
+        "difficulty": difficulty,
+        "user_answers": user_answers or {},
+        "quiz_details": quiz_details or [],
+        "timestamp": datetime.datetime.now(datetime.timezone.utc)
+    }
+    res = quiz_attempts_col.insert_one(attempt)
+    return str(res.inserted_id)
+
+def get_quiz_attempts_by_user(username, course_code=None):
+    """Retrieves all quiz attempts by a specific student."""
+    import re
+    query = {"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}}
+    if course_code:
+        query["course_code"] = course_code
+    return list(quiz_attempts_col.find(query).sort("timestamp", -1))
+
+def get_all_quiz_attempts():
+    """Retrieves all quiz attempts for admin/staff analytics."""
+    return list(quiz_attempts_col.find({}).sort("timestamp", -1))
+
+# --- Curriculum Management ---
+def add_department(dept_name):
+    """Add a new academic department."""
+    if not dept_name or not dept_name.strip():
+        return False, "Department name is required"
+    dept_name = dept_name.strip()
+    existing = departments_col.find_one({"dept_name": dept_name})
+    if existing:
+        return False, "Department already exists"
+    dept_id = departments_col.insert_one({"dept_name": dept_name}).inserted_id
+    return True, str(dept_id)
+
+def add_branch(branch_name, department_id):
+    """Add a new branch under a department."""
+    from bson.objectid import ObjectId
+    if not branch_name or not department_id:
+        return False, "Branch name and Department are required"
+    branch_name = branch_name.strip()
+    existing = branches_col.find_one({"branch_name": branch_name, "department_id": ObjectId(department_id)})
+    if existing:
+        return False, "Branch already exists in this Department"
+    b_id = branches_col.insert_one({"branch_name": branch_name, "department_id": ObjectId(department_id)}).inserted_id
+    return True, str(b_id)
+
+def add_course(course_code, course_name, branch_id, semester_number):
+    """Add a new course under a branch and semester."""
+    from bson.objectid import ObjectId
+    if not course_code or not course_name or not branch_id or not semester_number:
+        return False, "All course fields are required"
+    c_code = course_code.upper().strip()
+    existing = courses_col.find_one({"course_code": c_code, "branch_id": ObjectId(branch_id)})
+    if existing:
+        return False, f"Course {c_code} already exists in this branch"
+    c_id = courses_col.insert_one({
+        "course_code": c_code,
+        "course_name": course_name.strip(),
+        "branch_id": ObjectId(branch_id),
+        "semester_number": int(semester_number)
+    }).inserted_id
+    return True, str(c_id)
+
+def delete_course(course_id):
+    """Delete a course by Mongo ID."""
+    from bson.objectid import ObjectId
+    try:
+        res = courses_col.delete_one({"_id": ObjectId(course_id)})
+        return res.deleted_count > 0
+    except:
+        return False
+
+def get_all_courses_with_details():
+    """Returns all courses with their branch and department names."""
+    courses = list(courses_col.find({}))
+    for c in courses:
+        c["_id"] = str(c["_id"])
+        branch = branches_col.find_one({"_id": c.get("branch_id")})
+        if branch:
+            c["branch_name"] = branch.get("branch_name", "")
+            dept = departments_col.find_one({"_id": branch.get("department_id")})
+            c["department_name"] = dept.get("dept_name", "") if dept else ""
+        else:
+            c["branch_name"] = ""
+            c["department_name"] = ""
+    return courses
+
+# --- Two-Factor Authentication (TOTP) ---
+def enable_user_2fa(username, secret):
+    """Enable 2FA for a user with the provided TOTP secret."""
+    import re
+    res = users_col.update_one(
+        {"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}},
+        {"$set": {"two_factor_enabled": True, "two_factor_secret": secret}}
+    )
+    return res.modified_count > 0
+
+def disable_user_2fa(username):
+    """Disable 2FA for a user."""
+    import re
+    res = users_col.update_one(
+        {"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}},
+        {"$set": {"two_factor_enabled": False, "two_factor_secret": None}}
+    )
+    return res.modified_count > 0
+
+def get_user_2fa_secret(username):
+    """Retrieve user's 2FA secret if enabled."""
+    import re
+    user = users_col.find_one({"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
+    if user and user.get("two_factor_enabled"):
+        return user.get("two_factor_secret")
+    return None
+
+def verify_totp(username, totp_code):
+    """Verifies a 6-digit TOTP code against the user's secret."""
+    import pyotp
+    import re
+    user = users_col.find_one({"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
+    if not user or not user.get("two_factor_enabled"):
+        return True # Not required
+    secret = user.get("two_factor_secret")
+    if not secret:
+        return True
+    totp = pyotp.TOTP(secret)
+    return totp.verify(str(totp_code).strip(), valid_window=1)
+
 # Initialize seeding on import
 init_mongo_db()
+

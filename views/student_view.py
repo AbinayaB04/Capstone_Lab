@@ -279,6 +279,11 @@ def render_student_view():
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
+                if message.get("sources"):
+                    with st.expander("📚 Verified Course Syllabus References", expanded=False):
+                        for s in message["sources"]:
+                            st.markdown(f"**Source:** `{s.get('source', 'Lecture Note')}`")
+                            st.caption(f"{s.get('content', '')}")
                 
         # React to user input
         if prompt := st.chat_input("What do you want to learn today?"):
@@ -321,19 +326,27 @@ def render_student_view():
                         "session_id": st.session_state.get("active_session_id"),
                         "username": user.get("username")
                     }
+                    sources = []
                     try:
                         res = requests.post(f"{API_BASE_URL}/chat/query", json=payload)
                         if res.status_code == 200:
-                            response = res.json().get("response", "Error generating response.")
+                            data = res.json()
+                            response = data.get("response", "Error generating response.")
+                            sources = data.get("sources", [])
                         else:
                             response = f"API Error: {res.text}"
                     except Exception as e:
                         response = f"API Connection Error: {e}"
                         
                     st.markdown(response)
+                    if sources:
+                        with st.expander("📚 Verified Course Syllabus References", expanded=False):
+                            for s in sources:
+                                st.markdown(f"**Source:** `{s.get('source', 'Lecture Note')}`")
+                                st.caption(f"{s.get('content', '')}")
             
             # Add assistant response to chat history
-            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.session_state.messages.append({"role": "assistant", "content": response, "sources": sources})
                 
     elif nav_selection == "My Courses":
         st.title("My Courses")
@@ -478,6 +491,12 @@ def render_student_view():
         )
 
         
+        c_opt1, c_opt2 = st.columns(2)
+        with c_opt1:
+            selected_difficulty = st.selectbox("Exam Difficulty", ["Medium", "Easy", "Hard"], index=0, key="pe_diff_select")
+        with c_opt2:
+            selected_num_questions = st.selectbox("Number of Questions", [5, 3, 10], index=0, key="pe_num_select")
+        
         if st.button("Generate Quiz", type="primary"):
             with st.spinner("Analyzing course materials and generating questions..."):
                 import requests
@@ -486,19 +505,25 @@ def render_student_view():
                     payload = {
                         "course_code": selected_course,
                         "department_id": str(user_dept_id),
-                        "branch_id": str(selected_branch_id)
+                        "branch_id": str(selected_branch_id),
+                        "num_questions": int(selected_num_questions),
+                        "difficulty": selected_difficulty.lower()
                     }
-                    res = requests.post(f"{API_BASE_URL}/chat/generate-exam", json=payload)
+                    res = requests.post(f"{API_BASE_URL}/chat/generate-exam", json=payload, timeout=60)
                     if res.status_code == 200:
                         quiz_data = res.json().get("exam")
                     else:
                         quiz_data = None
-                except:
+                        st.error(f"Failed to generate quiz: {res.text}")
+                except Exception as err:
                     quiz_data = None
+                    st.error(f"Connection error while contacting server: {err}")
+
                 
                 if quiz_data:
                     st.session_state["current_quiz"] = quiz_data
                     st.session_state["quiz_course"] = selected_course
+                    st.session_state["quiz_difficulty"] = selected_difficulty
                     st.session_state["quiz_submitted"] = False
                     st.rerun()
                 else:
@@ -512,7 +537,6 @@ def render_student_view():
                 user_answers = {}
                 for i, q in enumerate(quiz):
                     st.markdown(f"**Q{i+1}: {q['question']}**")
-                    # Use index=None to ensure no default option is selected
                     user_answers[i] = st.radio(f"Options for Q{i+1}", q.get('options', []), key=f"q_{i}", index=None, label_visibility="collapsed")
                     st.write("")
                     
@@ -526,22 +550,77 @@ def render_student_view():
                             score += 1
                     st.session_state["quiz_score"] = score
                     st.session_state["user_answers"] = user_answers
+                    
+                    # Persist attempt to MongoDB
+                    from database.mongo_manager import record_quiz_attempt
+                    try:
+                        record_quiz_attempt(
+                            username=user.get("username"),
+                            course_code=selected_course,
+                            branch_id=selected_branch_id,
+                            semester=selected_semester,
+                            score=score,
+                            total_questions=len(quiz),
+                            difficulty=st.session_state.get("quiz_difficulty", "Medium").lower(),
+                            user_answers={str(k): v for k, v in user_answers.items()},
+                            quiz_details=quiz
+                        )
+                    except Exception as pe:
+                        print(f"Error saving quiz attempt: {pe}")
                     st.rerun()
                     
             if st.session_state.get("quiz_submitted"):
-                st.success(f"### Your Score: {st.session_state['quiz_score']} / {len(quiz)}")
+                score = st.session_state['quiz_score']
+                total = len(quiz)
+                pct = round((score / total) * 100, 1) if total > 0 else 0
+                if pct >= 80:
+                    st.balloons()
+                    st.success(f"### 🎉 Outstanding! Your Score: {score} / {total} ({pct}%)")
+                elif pct >= 50:
+                    st.info(f"### 👍 Good Effort! Your Score: {score} / {total} ({pct}%)")
+                else:
+                    st.warning(f"### 📚 Review Suggested: Your Score: {score} / {total} ({pct}%)")
+                    
                 for i, q in enumerate(quiz):
                     st.markdown(f"**Q{i+1}: {q['question']}**")
                     user_ans = st.session_state["user_answers"].get(i)
                     correct_ans = q.get('answer')
                     
                     if user_ans == correct_ans:
-                        st.write(f"✅ **You answered:** {user_ans}")
+                        st.write(f"✅ **Your Answer:** {user_ans}")
                     else:
-                        st.write(f"❌ **You answered:** {user_ans if user_ans else '(Skipped)'}")
-                        st.write(f"👉 **Correct answer:** {correct_ans}")
+                        st.write(f"❌ **Your Answer:** {user_ans if user_ans else '(Skipped)'}")
+                        st.write(f"👉 **Correct Answer:** {correct_ans}")
+                    
+                    if q.get("explanation"):
+                        st.info(f"💡 **Explanation & Concept:** {q['explanation']}")
                     st.write("---")
         
+        # --- Past Attempts History Section ---
+        st.divider()
+        with st.expander("📊 View Past Quiz Attempts & Score Analytics", expanded=False):
+            from database.mongo_manager import get_quiz_attempts_by_user
+            attempts = get_quiz_attempts_by_user(user.get("username"), selected_course)
+            if not attempts:
+                st.caption("No previous attempts recorded for this course yet.")
+            else:
+                import pandas as pd
+                hist_data = []
+                for att in attempts:
+                    t = att.get("timestamp")
+                    t_str = t.strftime("%Y-%m-%d %H:%M") if t else "Recent"
+                    hist_data.append({
+                        "Date": t_str,
+                        "Score": f"{att.get('score', 0)}/{att.get('total_questions', 0)}",
+                        "Percentage (%)": att.get("percentage", 0),
+                        "Difficulty": str(att.get("difficulty", "medium")).capitalize()
+                    })
+                df_hist = pd.DataFrame(hist_data)
+                st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                if len(df_hist) > 1:
+                    st.caption("Performance Trend:")
+                    st.line_chart(df_hist.set_index("Date")["Percentage (%)"])
+
     elif nav_selection == "Settings":
         st.title("User Settings")
         
@@ -574,3 +653,55 @@ def render_student_view():
                                 st.success("Password updated successfully!")
                             else:
                                 st.error("An error occurred while updating the password.")
+
+        st.divider()
+        st.markdown("### 🔐 Two-Factor Authentication (2FA / TOTP)")
+        from database.mongo_manager import get_user_2fa_secret, enable_user_2fa, disable_user_2fa
+        import pyotp
+        
+        current_secret = get_user_2fa_secret(user.get("username"))
+        if current_secret:
+            st.success("✅ Two-Factor Authentication is currently **ACTIVE** on your account.")
+            if st.button("Disable 2FA", type="secondary"):
+                disable_user_2fa(user.get("username"))
+                from services.audit_service import log_system_event
+                log_system_event(user.get("username"), user.get("role"), "2fa_disabled", "User disabled 2FA")
+                st.info("2FA disabled successfully.")
+                st.rerun()
+        else:
+            st.info("Protect your account with Google Authenticator or Microsoft Authenticator.")
+            if "temp_2fa_secret" not in st.session_state:
+                if st.button("Setup Two-Factor Authentication"):
+                    st.session_state["temp_2fa_secret"] = pyotp.random_base32()
+                    st.rerun()
+            else:
+                secret = st.session_state["temp_2fa_secret"]
+                st.markdown(f"**Step 1:** Enter this key into your Authenticator app:")
+                st.code(secret, language="text")
+                st.caption(f"Account: {user.get('username')} | Issuer: StudyMate")
+                
+                with st.form("verify_2fa_setup_form"):
+                    st.markdown("**Step 2:** Enter the 6-digit code shown in your app to activate:")
+                    test_code = st.text_input("6-digit TOTP Code", max_chars=6)
+                    c_submit, c_cancel = st.columns(2)
+                    with c_submit:
+                        activate_btn = st.form_submit_button("Activate 2FA", type="primary")
+                    with c_cancel:
+                        cancel_setup = st.form_submit_button("Cancel")
+                        
+                    if cancel_setup:
+                        del st.session_state["temp_2fa_secret"]
+                        st.rerun()
+                        
+                    if activate_btn:
+                        totp = pyotp.TOTP(secret)
+                        if totp.verify(test_code.strip(), valid_window=1):
+                            enable_user_2fa(user.get("username"), secret)
+                            del st.session_state["temp_2fa_secret"]
+                            from services.audit_service import log_system_event
+                            log_system_event(user.get("username"), user.get("role"), "2fa_enabled", "User enabled 2FA")
+                            st.success("Two-Factor Authentication successfully activated!")
+                            st.rerun()
+                        else:
+                            st.error("Invalid verification code. Please make sure your device clock is accurate.")
+

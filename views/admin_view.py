@@ -1,14 +1,35 @@
 import streamlit as st
-from streamlit_option_menu import option_menu
-from auth.session_manager import logout_user
-from utils.image_utils import get_base64_of_bin_file
-from database.mongo_manager import add_user, get_all_users, delete_user, get_departments, get_branches_by_department
-from bson.objectid import ObjectId
 import pandas as pd
+import datetime
+import pyotp
+from streamlit_option_menu import option_menu
+from bson.objectid import ObjectId
+
+from auth.session_manager import logout_user, is_password_strong
+from auth.rbac_manager import RBACManager
+from utils.image_utils import get_base64_of_bin_file
+from services.audit_service import log_system_event, get_audit_logs_df
+from database.mongo_manager import (
+    users_col,
+    add_user,
+    get_all_users,
+    delete_user,
+    get_departments,
+    get_branches_by_department,
+    add_department,
+    add_branch,
+    add_course,
+    delete_course,
+    get_all_courses_with_details,
+    verify_login,
+    update_password,
+    get_user_2fa_secret,
+    enable_user_2fa,
+    disable_user_2fa
+)
 
 def render_admin_view():
     user = st.session_state.get("user", {})
-    from auth.rbac_manager import RBACManager
     if not RBACManager.has_permission(user.get("role"), "manage_users"):
         st.error("Access Denied: You do not have permission to view this page.")
         if st.button("Logout"):
@@ -118,8 +139,8 @@ def render_admin_view():
     with st.sidebar:
         nav_selection = option_menu(
             menu_title=None,
-            options=["Register User", "View/Manage Users", "Analytics"],
-            icons=["person-plus", "database", "graph-up"], 
+            options=["Register User", "View/Manage Users", "Manage Curriculum", "Analytics", "Settings"],
+            icons=["person-plus", "database", "book", "graph-up", "gear"], 
             default_index=0,
             styles=menu_styles
         )
@@ -136,7 +157,6 @@ def render_admin_view():
         departments = get_departments()
         dept_options = {str(d["_id"]): d["dept_name"] for d in departments}
         
-        import datetime
         col1, col2 = st.columns(2)
         with col1:
             name = st.text_input("Full Name")
@@ -180,7 +200,6 @@ def render_admin_view():
                     # Generate strong password: 01/01/2004 -> 01Jan2004@
                     auto_password = dob.strftime("%d%b%Y") + "@"
                     
-                    from auth.session_manager import is_password_strong
                     is_strong, strength_msg = is_password_strong(auto_password)
                     
                     if not is_strong:
@@ -238,7 +257,6 @@ def render_admin_view():
                 if iam_action == "Unlock Account":
                     st.info("Unlocking an account will reset their failed login attempts.")
                     if st.button("Unlock Account", type="primary") and selected_uid:
-                        from database.mongo_manager import users_col
                         users_col.update_one({"username": selected_uid}, {"$set": {"locked_out": False, "failed_attempts": 0}})
                         st.success(f"Successfully unlocked account: {selected_uid}")
                         st.rerun()
@@ -247,12 +265,10 @@ def render_admin_view():
                     st.info("Ensure the new password meets security requirements (A-Z, a-z, 0-9, and special character).")
                     new_pwd = st.text_input("New Password", type="password")
                     if st.button("Reset Password", type="primary") and selected_uid and new_pwd:
-                        from auth.session_manager import is_password_strong
                         is_strong, msg = is_password_strong(new_pwd)
                         if not is_strong:
                             st.error(f"Weak Password: {msg}")
                         else:
-                            from database.mongo_manager import update_password
                             if update_password(selected_uid, new_pwd):
                                 st.success(f"Successfully reset password for: {selected_uid}")
                                 st.rerun()
@@ -262,7 +278,6 @@ def render_admin_view():
                 elif iam_action == "Delete User":
                     st.error("Warning: This action is permanent and cannot be undone.")
                     if st.button("Delete User", type="primary") and selected_uid:
-                        from database.mongo_manager import delete_user
                         if delete_user(selected_uid):
                             st.success(f"Deleted user: {selected_uid}")
                             st.rerun()
@@ -271,7 +286,6 @@ def render_admin_view():
         st.title("System Analytics")
         st.markdown("Track system usage and auditing events.")
         
-        from services.audit_service import get_audit_logs_df
         df = get_audit_logs_df()
         
         if df.empty:
@@ -297,3 +311,201 @@ def render_admin_view():
                 
             st.subheader("Raw Audit Logs")
             st.dataframe(df.sort_values(by="timestamp", ascending=False), use_container_width=True)
+
+    elif nav_selection == "Manage Curriculum":
+        st.title("Curriculum & Course Management")
+        st.markdown("Add and manage departments, academic branches, and semester courses.")
+        
+        curr_tab1, curr_tab2, curr_tab3 = st.tabs(["📚 Courses", "🌿 Branches", "🏛️ Departments"])
+        
+        # 1. Courses Tab
+        with curr_tab1:
+            st.subheader("Existing Courses")
+            all_courses = get_all_courses_with_details()
+            if all_courses:
+                df_courses = pd.DataFrame(all_courses)
+                display_cols = ["course_code", "course_name", "semester_number", "branch_name", "department_name"]
+                for col in display_cols:
+                    if col not in df_courses.columns:
+                        df_courses[col] = ""
+                df_courses = df_courses[display_cols]
+                df_courses.columns = ["Code", "Course Name", "Semester", "Branch", "Department"]
+                st.dataframe(df_courses, use_container_width=True, hide_index=True)
+                
+                st.write("")
+                with st.expander("🗑️ Delete a Course"):
+                    course_map = {c["_id"]: f"{c.get('course_code')} - {c.get('course_name')}" for c in all_courses}
+                    selected_c_id = st.selectbox("Select Course to Remove", options=list(course_map.keys()), format_func=lambda x: course_map[x])
+                    if st.button("Delete Course", type="secondary") and selected_c_id:
+                        if delete_course(selected_c_id):
+                            st.success("Course deleted successfully.")
+                            st.rerun()
+                        else:
+                            st.error("Failed to delete course.")
+            else:
+                st.info("No courses created yet.")
+                
+            st.divider()
+            st.subheader("Add New Course")
+            departments = get_departments()
+            dept_opts = {str(d["_id"]): d["dept_name"] for d in departments}
+            
+            c_dept = st.selectbox("Department", options=list(dept_opts.keys()), format_func=lambda x: dept_opts[x], key="c_add_dept")
+            c_branches = get_branches_by_department(ObjectId(c_dept)) if c_dept else []
+            branch_opts = {str(b["_id"]): b["branch_name"] for b in c_branches}
+            
+            if not branch_opts:
+                st.warning("No branches found in this department. Please create a branch first in the 'Branches' tab.")
+            else:
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    c_branch = st.selectbox("Branch", options=list(branch_opts.keys()), format_func=lambda x: branch_opts[x], key="c_add_branch")
+                    c_sem = st.selectbox("Semester", options=list(range(1, 9)), key="c_add_sem")
+                with col_c2:
+                    c_code = st.text_input("Course Code (e.g. CS601)", key="c_add_code")
+                    c_name = st.text_input("Course Name (e.g. Cloud Computing)", key="c_add_name")
+                    
+                if st.button("Add Course", type="primary"):
+                    if c_branch and c_sem and c_code and c_name:
+                        success, msg = add_course(c_code, c_name, c_branch, c_sem)
+                        if success:
+                            st.success(f"Successfully added course: {c_code.upper()} - {c_name}")
+                            st.rerun()
+                        else:
+                            st.error(f"Error: {msg}")
+                    else:
+                        st.error("Please fill in all course fields.")
+
+        # 2. Branches Tab
+        with curr_tab2:
+            st.subheader("Add New Branch")
+            departments = get_departments()
+            dept_opts = {str(d["_id"]): d["dept_name"] for d in departments}
+            
+            if not dept_opts:
+                st.warning("Please create a department first.")
+            else:
+                b_dept = st.selectbox("Select Department for Branch", options=list(dept_opts.keys()), format_func=lambda x: dept_opts[x], key="b_add_dept")
+                b_name = st.text_input("Branch Name (e.g. B.Tech Artificial Intelligence)", key="b_add_name")
+                
+                if st.button("Add Branch", type="primary"):
+                    if b_name and b_dept:
+                        success, msg = add_branch(b_name, b_dept)
+                        if success:
+                            st.success(f"Branch '{b_name}' created successfully!")
+                            st.rerun()
+                        else:
+                            st.error(f"Error: {msg}")
+                    else:
+                        st.error("Please enter a branch name.")
+                        
+            st.divider()
+            st.subheader("Current Branches")
+            if dept_opts:
+                for d_id, d_name in dept_opts.items():
+                    branches = get_branches_by_department(ObjectId(d_id))
+                    st.markdown(f"**{d_name}:**")
+                    if branches:
+                        for b in branches:
+                            st.write(f"- {b['branch_name']}")
+                    else:
+                        st.caption("No branches in this department yet.")
+
+        # 3. Departments Tab
+        with curr_tab3:
+            st.subheader("Add New Department")
+            d_name = st.text_input("Department Name (e.g. School of Electrical Sciences)", key="d_add_name")
+            if st.button("Add Department", type="primary"):
+                if d_name:
+                    success, msg = add_department(d_name)
+                    if success:
+                        st.success(f"Department '{d_name}' created successfully!")
+                        st.rerun()
+                    else:
+                        st.error(f"Error: {msg}")
+                else:
+                    st.error("Please enter a department name.")
+                    
+            st.divider()
+            st.subheader("Current Departments")
+            departments = get_departments()
+            for d in departments:
+                st.write(f"🏛️ **{d.get('dept_name')}**")
+
+    elif nav_selection == "Settings":
+        st.title("Admin Account Settings")
+        user = st.session_state.get("user", {})
+        
+        st.markdown("### Change Password")
+        with st.form("admin_password_form"):
+            old_p = st.text_input("Current Password", type="password")
+            new_p = st.text_input("New Password", type="password")
+            conf_p = st.text_input("Confirm New Password", type="password")
+            
+            if st.form_submit_button("Update Password", type="primary"):
+                if not old_p or not new_p or not conf_p:
+                    st.error("All fields are required.")
+                elif new_p != conf_p:
+                    st.error("Passwords do not match.")
+                else:
+                    is_s, s_msg = is_password_strong(new_p)
+                    if not is_s:
+                        st.error(f"Weak Password: {s_msg}")
+                    else:
+                        ok, _ = verify_login(user["username"], old_p)
+                        if not ok:
+                            st.error("Current password incorrect.")
+                        else:
+                            if update_password(user["username"], new_p):
+                                log_system_event(user["username"], user["role"], "password_change", "Admin changed password")
+                                st.success("Password updated successfully!")
+                            else:
+                                st.error("Failed to update password.")
+
+        st.divider()
+        st.markdown("### 🔐 Two-Factor Authentication (2FA / TOTP)")
+        
+        current_secret = get_user_2fa_secret(user.get("username"))
+        if current_secret:
+            st.success("✅ Two-Factor Authentication is currently **ACTIVE** on your Administrator account.")
+            if st.button("Disable 2FA", type="secondary"):
+                disable_user_2fa(user.get("username"))
+                log_system_event(user.get("username"), user.get("role"), "2fa_disabled", "Admin disabled 2FA")
+                st.info("2FA disabled successfully.")
+                st.rerun()
+        else:
+            st.info("Protect your Administrator account with Google Authenticator or Microsoft Authenticator.")
+            if "temp_2fa_secret" not in st.session_state:
+                if st.button("Setup Two-Factor Authentication"):
+                    st.session_state["temp_2fa_secret"] = pyotp.random_base32()
+                    st.rerun()
+            else:
+                secret = st.session_state["temp_2fa_secret"]
+                st.markdown(f"**Step 1:** Enter this key into your Authenticator app:")
+                st.code(secret, language="text")
+                st.caption(f"Account: {user.get('username')} | Issuer: StudyMate")
+                
+                with st.form("admin_verify_2fa_form"):
+                    st.markdown("**Step 2:** Enter the 6-digit code shown in your app to activate:")
+                    test_code = st.text_input("6-digit TOTP Code", max_chars=6)
+                    c_sub, c_can = st.columns(2)
+                    with c_sub:
+                        act_btn = st.form_submit_button("Activate 2FA", type="primary")
+                    with c_can:
+                        can_btn = st.form_submit_button("Cancel")
+                        
+                    if can_btn:
+                        del st.session_state["temp_2fa_secret"]
+                        st.rerun()
+                        
+                    if act_btn:
+                        totp = pyotp.TOTP(secret)
+                        if totp.verify(test_code.strip(), valid_window=1):
+                            enable_user_2fa(user.get("username"), secret)
+                            del st.session_state["temp_2fa_secret"]
+                            log_system_event(user.get("username"), user.get("role"), "2fa_enabled", "Admin enabled 2FA")
+                            st.success("Two-Factor Authentication successfully activated!")
+                            st.rerun()
+                        else:
+                            st.error("Invalid verification code. Please ensure your device clock is accurate.")
+

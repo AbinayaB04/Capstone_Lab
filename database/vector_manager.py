@@ -45,3 +45,14 @@ def search_documents(query_text, department_id, branch_id, course_code, n_result
     except Exception as e:
         print(f"Error querying ChromaDB: {e}")
         return {"documents": [[]]}
+
+def delete_document_chunks_by_file_id(file_id: str):
+    """Delete all chunks associated with a specific file_id from ChromaDB."""
+    try:
+        collection = get_or_create_collection()
+        collection.delete(where={"file_id": str(file_id)})
+        return True
+    except Exception as e:
+        print(f"Error deleting chunks from ChromaDB: {e}")
+        return False
+

@@ -4,11 +4,27 @@ StudyMate is an advanced, AI-driven educational platform designed for students a
 
 ## 🚀 Features
 - **Role-Based Access Control (RBAC)**: Secure separation between Admins, Staff, and Students.
-- **Enterprise IAM**: Strict password complexity, auto-account lockouts after failed attempts, and Admin override controls (Unlock Account / Force Password Reset).
-- **AI Query Engine**: Chat with course materials powered by Google Gemini / Groq and ChromaDB.
-- **Chat Management**: Persistent chat sessions that can be renamed and deleted.
-- **Background Task Processing**: Asynchronous PDF parsing, chunking, and vector embedding generation.
-- **Hot-Reloading Environment**: Docker volume mounts allow instant UI and API updates without container rebuilds.
+- **Enterprise IAM & Security**:
+  - Two-Factor Authentication (2FA / TOTP) compatible with Google Authenticator and Microsoft Authenticator.
+  - Strict password complexity, password reuse prevention, and 90-day expiration policy.
+  - Auto-account lockout after 5 failed attempts and Admin override controls (Unlock Account / Force Password Reset).
+  - Date of Birth (DOB) verification for password self-recovery.
+- **AI Query Engine & Transparent RAG**:
+  - Chat with course materials powered by Google Gemini and Groq (Llama-3) fallback.
+  - Transparent citations: Expandable "Verified Course Syllabus References" showing exact lecture excerpts and page chunks.
+  - Semantic caching via Redis vector search to save API tokens.
+- **AI Practice Exams & Student Analytics**:
+  - Custom exam generation by Difficulty (*Easy*, *Medium*, *Hard*) and Question Count (*3*, *5*, *10*).
+  - Instant grading with detailed **Explanations & Concept Rationales** for each question.
+  - Persistent exam history in MongoDB with score progression line charts.
+- **Course & Curriculum Management (Admin Portal)**:
+  - Full UI controls to create Departments, Branches, and Semester Courses without direct database manipulation.
+- **Document Management & Vector Synchronization**:
+  - Support for `.pdf` and `.pptx` documents.
+  - Automatic document deletion purging raw files from GridFS and corresponding vector chunks from ChromaDB.
+- **Automated Test Suite**:
+  - Built-in `pytest` coverage for RBAC, authentication, JWT tokens, TOTP verification, curriculum CRUD, and exam scoring.
+
 
 ## 🛠️ Tech Stack
 - **Frontend**: Streamlit
@@ -79,3 +95,19 @@ If changes are made to the dependencies (e.g., modifying `requirements.txt`) or 
    ```
 
 For standard Python code updates (`app.py`, `views/`, `api/`, etc.), **no rebuild is required**. Just refresh your browser!
+
+---
+
+## 🧪 Running Automated Tests
+
+To verify the test suite:
+```bash
+pytest tests
+```
+This runs 10 test suites covering:
+- **Role-Based Access Control (RBAC)** permissions
+- **Password Complexity & Strength** validation
+- **JWT Authentication & Lifecycle**
+- **Two-Factor Authentication (2FA / TOTP)** verification
+- **Curriculum Management CRUD** (Departments, Branches, Courses)
+- **Exam Scoring & Persistence**

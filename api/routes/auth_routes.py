@@ -16,6 +16,18 @@ class LoginRequest(BaseModel):
     username: str
     password: str
     role: str = None
+    totp_code: str = None
+
+class Enable2FARequest(BaseModel):
+    username: str
+
+class VerifyEnable2FARequest(BaseModel):
+    username: str
+    secret: str
+    code: str
+
+class Disable2FARequest(BaseModel):
+    username: str
 
 class ForgotPasswordVerifyRequest(BaseModel):
     username: str
@@ -48,6 +60,16 @@ async def login(request: Request, login_req: LoginRequest):
         raise HTTPException(status_code=401, detail=response)
         
     user_data = response
+    
+    # Check 2FA if enabled
+    if user_data.get("two_factor_enabled"):
+        from database.mongo_manager import verify_totp
+        if not login_req.totp_code:
+            return {"requires_2fa": True, "message": "Two-Factor Authentication code required."}
+        if not verify_totp(login_req.username, login_req.totp_code):
+            log_audit_action(login_req.username, "FAILED_2FA", "system", "Invalid TOTP code")
+            raise HTTPException(status_code=401, detail="Invalid Two-Factor Authentication (2FA) code.")
+            
     if login_req.role and str(user_data.get("role", "")).lower() != str(login_req.role).lower():
         raise HTTPException(status_code=403, detail=f"User is not registered as {login_req.role}. Found {user_data.get('role', 'unknown')}.")
         
@@ -61,6 +83,33 @@ async def login(request: Request, login_req: LoginRequest):
             
     log_audit_action(login_req.username, "SUCCESSFUL_LOGIN", "system", "User logged in")
     return {"token": access_token, "refresh_token": refresh_token, "user": user_data}
+
+@router.post("/2fa/setup")
+async def setup_2fa(req: Enable2FARequest):
+    import pyotp
+    secret = pyotp.random_base32()
+    totp = pyotp.TOTP(secret)
+    provisioning_uri = totp.provisioning_uri(name=req.username, issuer_name="StudyMate")
+    return {"secret": secret, "provisioning_uri": provisioning_uri}
+
+@router.post("/2fa/confirm")
+async def confirm_2fa(req: VerifyEnable2FARequest):
+    import pyotp
+    from database.mongo_manager import enable_user_2fa
+    totp = pyotp.TOTP(req.secret)
+    if totp.verify(str(req.code).strip(), valid_window=1):
+        enable_user_2fa(req.username, req.secret)
+        log_audit_action(req.username, "2FA_ENABLED", "system", "User enabled 2FA")
+        return {"status": "success", "message": "2FA successfully enabled."}
+    raise HTTPException(status_code=400, detail="Invalid 2FA code. Please verify and try again.")
+
+@router.post("/2fa/disable")
+async def disable_2fa_route(req: Disable2FARequest):
+    from database.mongo_manager import disable_user_2fa
+    disable_user_2fa(req.username)
+    log_audit_action(req.username, "2FA_DISABLED", "system", "User disabled 2FA")
+    return {"status": "success", "message": "2FA successfully disabled."}
+
 
 @router.post("/logout")
 async def logout(authorization: str = Header(None)):

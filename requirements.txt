@@ -17,3 +17,5 @@ uvicorn
 python-multipart
 redis
 slowapi
+pyotp
+pytest

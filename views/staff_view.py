@@ -236,16 +236,18 @@ def render_staff_view():
     
     if nav_selection == "Upload Materials":
         st.title("Upload Course Materials")
-        st.markdown(f"Upload syllabi, lecture notes, and study guides for **{course_options.get(selected_course_code, '')}**. These documents will be processed and added to the AI's knowledge base for your students.")
+        st.markdown(f"Upload syllabi, lecture notes, and study guides for **{course_options.get(selected_course_code, '')}**. Supported formats: **.pdf** and **.pptx**.")
+        st.info("💡 **Tip:** If you have older PowerPoint presentations (`.ppt`), open them in PowerPoint and 'Save As' `.pptx` or `.pdf` before uploading.")
         
-        uploaded_files = st.file_uploader("Upload PDF Documents", type=["pdf"], accept_multiple_files=True)
+        uploaded_files = st.file_uploader("Upload Course Materials", type=["pdf", "pptx"], accept_multiple_files=True)
         
         if st.button("Upload to Knowledge Base", type="primary"):
             if uploaded_files:
                     import requests
                     API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
                     
-                    files_to_upload = [('files', (f.name, f.getvalue(), 'application/pdf')) for f in uploaded_files]
+                    files_to_upload = [('files', (f.name, f.getvalue(), 'application/octet-stream')) for f in uploaded_files]
+
                     data = {
                         "user_dept_id": str(user_dept_id),
                         "selected_branch_id": str(selected_branch_id),
@@ -377,3 +379,55 @@ def render_staff_view():
                                 st.success("Password updated successfully!")
                             else:
                                 st.error("An error occurred while updating the password.")
+
+        st.divider()
+        st.markdown("### 🔐 Two-Factor Authentication (2FA / TOTP)")
+        from database.mongo_manager import get_user_2fa_secret, enable_user_2fa, disable_user_2fa
+        import pyotp
+        
+        current_secret = get_user_2fa_secret(user.get("username"))
+        if current_secret:
+            st.success("✅ Two-Factor Authentication is currently **ACTIVE** on your staff account.")
+            if st.button("Disable 2FA", type="secondary"):
+                disable_user_2fa(user.get("username"))
+                from services.audit_service import log_system_event
+                log_system_event(user.get("username"), user.get("role"), "2fa_disabled", "Staff disabled 2FA")
+                st.info("2FA disabled successfully.")
+                st.rerun()
+        else:
+            st.info("Protect your staff account with Google Authenticator or Microsoft Authenticator.")
+            if "temp_2fa_secret" not in st.session_state:
+                if st.button("Setup Two-Factor Authentication"):
+                    st.session_state["temp_2fa_secret"] = pyotp.random_base32()
+                    st.rerun()
+            else:
+                secret = st.session_state["temp_2fa_secret"]
+                st.markdown(f"**Step 1:** Enter this key into your Authenticator app:")
+                st.code(secret, language="text")
+                st.caption(f"Account: {user.get('username')} | Issuer: StudyMate")
+                
+                with st.form("staff_verify_2fa_form"):
+                    st.markdown("**Step 2:** Enter the 6-digit code shown in your app to activate:")
+                    test_code = st.text_input("6-digit TOTP Code", max_chars=6)
+                    c_submit, c_cancel = st.columns(2)
+                    with c_submit:
+                        activate_btn = st.form_submit_button("Activate 2FA", type="primary")
+                    with c_cancel:
+                        cancel_setup = st.form_submit_button("Cancel")
+                        
+                    if cancel_setup:
+                        del st.session_state["temp_2fa_secret"]
+                        st.rerun()
+                        
+                    if activate_btn:
+                        totp = pyotp.TOTP(secret)
+                        if totp.verify(test_code.strip(), valid_window=1):
+                            enable_user_2fa(user.get("username"), secret)
+                            del st.session_state["temp_2fa_secret"]
+                            from services.audit_service import log_system_event
+                            log_system_event(user.get("username"), user.get("role"), "2fa_enabled", "Staff enabled 2FA")
+                            st.success("Two-Factor Authentication successfully activated!")
+                            st.rerun()
+                        else:
+                            st.error("Invalid verification code. Please make sure your device clock is accurate.")
+

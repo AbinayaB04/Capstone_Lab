@@ -116,22 +116,56 @@ def render_login_view():
                                 except requests.exceptions.RequestException:
                                     st.error("Server unavailable.")
                                     
+            elif st.session_state.get("pending_2fa", False):
+                st.markdown("<h3 style='text-align: center; color: #1F1D1A; margin-bottom: 15px; font-family: serif;'>🔐 Two-Factor Authentication</h3>", unsafe_allow_html=True)
+                st.info("Please enter the 6-digit code from your Authenticator app.")
+                totp_input = st.text_input("6-digit TOTP Code", max_chars=6, placeholder="123456")
+                
+                c_btn1, c_btn2 = st.columns(2)
+                with c_btn1:
+                    cancel_2fa = st.form_submit_button("Cancel", use_container_width=True)
+                with c_btn2:
+                    verify_2fa_btn = st.form_submit_button("Verify & Login", use_container_width=True, type="primary")
+                    
+                if cancel_2fa:
+                    st.session_state["pending_2fa"] = False
+                    st.session_state.pop("pending_username", None)
+                    st.session_state.pop("pending_password", None)
+                    st.session_state.pop("pending_role", None)
+                    st.rerun()
+                    
+                if verify_2fa_btn:
+                    if not totp_input or len(totp_input) != 6:
+                        st.error("Please enter a valid 6-digit code.")
+                    else:
+                        u_id = st.session_state.get("pending_username")
+                        p_wd = st.session_state.get("pending_password")
+                        r_le = st.session_state.get("pending_role")
+                        success, message = login_user(u_id, password=p_wd, role=r_le, totp_code=totp_input)
+                        from services.audit_service import log_login
+                        if success is True:
+                            log_login(u_id, r_le, "success")
+                            st.session_state["pending_2fa"] = False
+                            st.success("2FA verified! Logging in...")
+                            st.rerun()
+                        else:
+                            log_login(u_id, r_le, "failed_2fa")
+                            st.error(message or "Invalid 2FA code.")
             else:
                 st.markdown(f"<h3 style='text-align: center; color: #1F1D1A; margin-bottom: 25px; font-family: serif;'>{role} Login</h3>", unsafe_allow_html=True)
             
-            # Form fields based on role
-            if role == "Admin":
-                admin_id = st.text_input("Admin ID")
-                password = st.text_input("Password", type="password")
-            elif role == "Staff":
-                login_id = st.text_input("Staff ID")
-                password = st.text_input("Password", type="password")
-            else: # Student
-                username = st.text_input("Rollno")
-                password = st.text_input("Password", type="password")
-            
-            
-            if not st.session_state.get("show_forgot_password", False):
+                # Form fields based on role
+                if role == "Admin":
+                    admin_id = st.text_input("Admin ID")
+                    password = st.text_input("Password", type="password")
+                elif role == "Staff":
+                    login_id = st.text_input("Staff ID")
+                    password = st.text_input("Password", type="password")
+                else: # Student
+                    username = st.text_input("Rollno")
+                    password = st.text_input("Password", type="password")
+                
+                
                 st.write("") # Spacer
                 
                 # Center the submit button
@@ -156,7 +190,13 @@ def render_login_view():
                     if user_identifier and password:
                         success, message = login_user(user_identifier, password=password, role=role)
                         from services.audit_service import log_login
-                        if success:
+                        if success == "2fa_required":
+                            st.session_state["pending_2fa"] = True
+                            st.session_state["pending_username"] = user_identifier
+                            st.session_state["pending_password"] = password
+                            st.session_state["pending_role"] = role
+                            st.rerun()
+                        elif success is True:
                             log_login(user_identifier, role, "success")
                             st.success(f"Logging in as {role}...")
                             st.rerun()

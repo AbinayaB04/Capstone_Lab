@@ -63,15 +63,20 @@ def check_idle_timeout(timeout_minutes=30):
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 import requests
 
-def login_user(username, password=None, role=None):
+def login_user(username, password=None, role=None, totp_code=None):
     if password:
         try:
+            payload = {"username": username, "password": password, "role": role}
+            if totp_code:
+                payload["totp_code"] = str(totp_code).strip()
             response = requests.post(
                 f"{API_BASE_URL}/auth/login",
-                json={"username": username, "password": password, "role": role}
+                json=payload
             )
             if response.status_code == 200:
                 data = response.json()
+                if data.get("requires_2fa"):
+                    return "2fa_required", data.get("message", "2FA code required")
                 st.session_state["logged_in"] = True
                 st.session_state["jwt_token"] = data["token"]
                 st.session_state["refresh_token"] = data.get("refresh_token")
