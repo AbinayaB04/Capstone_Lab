@@ -1,9 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
 from typing import List, Optional
 from database.mongo_manager import fs, add_document_record, get_documents_by_course, delete_document as db_delete_document
 from services.audit_service import log_document_access
 from utils.pdf_utils import extract_and_chunk_pdf
 from database.vector_manager import insert_document_chunk
+from api.dependencies import get_current_user, require_permission, require_role, enforce_tenant_isolation
 import uuid
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -55,9 +56,17 @@ async def upload_documents(
     selected_branch_id: str = Form(...),
     selected_semester: int = Form(...),
     selected_course_code: str = Form(...),
-    uploader_username: str = Form(...),
-    role: str = Form(...)
+    uploader_username: Optional[str] = Form(None),
+    role: Optional[str] = Form(None),
+    current_user: dict = Depends(require_permission("upload_materials"))
 ):
+    # Enforce verified cryptographic identity from JWT Bearer token
+    verified_username = current_user.get("username")
+    verified_role = current_user.get("role")
+    
+    # Enforce multi-tenant isolation: verify user cannot upload for another department
+    enforce_tenant_isolation(current_user, requested_dept_id=user_dept_id, requested_branch_id=selected_branch_id)
+    
     queued_files = []
     for uploaded_file in files:
         file_bytes = await uploaded_file.read()
@@ -69,15 +78,18 @@ async def upload_documents(
             selected_branch_id,
             selected_semester,
             selected_course_code,
-            uploader_username,
-            role
+            verified_username,
+            verified_role
         )
         queued_files.append(uploaded_file.filename)
         
     return {"message": "Documents queued for background processing.", "files": queued_files}
 
 @router.get("/course/{course_code}")
-async def get_documents(course_code: str):
+async def get_documents(
+    course_code: str,
+    current_user: dict = Depends(require_permission("view_materials"))
+):
     docs = get_documents_by_course(course_code)
     for doc in docs:
         doc["_id"] = str(doc["_id"])
@@ -85,8 +97,12 @@ async def get_documents(course_code: str):
     return {"documents": docs}
 
 @router.delete("/{doc_id}")
-async def delete_doc(doc_id: str):
+async def delete_doc(
+    doc_id: str,
+    current_user: dict = Depends(require_permission("delete_materials"))
+):
     if db_delete_document(doc_id):
+        log_document_access(current_user.get("username", "unknown"), current_user.get("role", "staff"), doc_id, "delete")
         return {"message": "Document deleted successfully"}
     raise HTTPException(status_code=404, detail="Document not found or could not be deleted")
 
@@ -117,6 +133,9 @@ def process_sync_background():
             print(f"Sync error for {doc.get('filename')}: {e}")
 
 @router.post("/sync-chroma")
-def sync_chroma_db(background_tasks: BackgroundTasks):
+def sync_chroma_db(
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(require_role(["admin"]))
+):
     background_tasks.add_task(process_sync_background)
     return {"message": "Sync started in background."}

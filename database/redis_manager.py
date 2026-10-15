@@ -13,7 +13,13 @@ INDEX_NAME = "idx:semantic_cache"
 PREFIX = "cache:"
 
 def get_redis_client():
-    return redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
+    return redis.Redis(
+        host=REDIS_HOST, 
+        port=REDIS_PORT, 
+        decode_responses=False,
+        socket_timeout=1.0,
+        socket_connect_timeout=1.0
+    )
 
 def init_redis_index():
     client = get_redis_client()
@@ -112,3 +118,22 @@ def is_token_blacklisted(token: str) -> bool:
     except Exception as e:
         print(f"Redis check blacklist error: {e}")
         return False
+
+def set_active_session(username: str, token: str, expires_in: int = 14400):
+    """
+    Enforces single-device / concurrent session control.
+    When a user logs in from a new location, their previous token is revoked immediately.
+    """
+    client = get_redis_client()
+    try:
+        active_key = f"active_session:{username.lower()}"
+        previous_token = client.get(active_key)
+        if previous_token:
+            prev_token_str = previous_token.decode('utf-8') if isinstance(previous_token, bytes) else str(previous_token)
+            if prev_token_str != token:
+                # Invalidate the previous session token
+                client.set(f"blacklist:{prev_token_str}", "true", ex=expires_in)
+        client.set(active_key, token, ex=expires_in)
+    except Exception as e:
+        print(f"Redis active session tracking error: {e}")
+

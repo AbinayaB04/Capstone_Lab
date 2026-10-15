@@ -3,7 +3,7 @@ import os
 import requests
 from streamlit_lottie import st_lottie
 from streamlit_option_menu import option_menu
-from auth.session_manager import logout_user
+from auth.session_manager import logout_user, get_auth_headers
 from utils.image_utils import get_base64_of_bin_file
 from services.llm_service import AIEngine
 from database.mongo_manager import get_branches_by_department, get_courses_by_branch_and_sem, get_documents_by_course, get_file_from_gridfs
@@ -328,7 +328,11 @@ def render_student_view():
                     }
                     sources = []
                     try:
-                        res = requests.post(f"{API_BASE_URL}/chat/query", json=payload)
+                        res = requests.post(
+                            f"{API_BASE_URL}/chat/query", 
+                            json=payload,
+                            headers=get_auth_headers()
+                        )
                         if res.status_code == 200:
                             data = res.json()
                             response = data.get("response", "Error generating response.")

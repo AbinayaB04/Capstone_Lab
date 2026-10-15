@@ -112,6 +112,13 @@ def logout_user():
     if "last_activity" in st.session_state:
         del st.session_state["last_activity"]
 
+def get_auth_headers():
+    """Returns HTTP headers containing the active JWT Bearer token for API calls."""
+    token = st.session_state.get("jwt_token")
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
 def is_password_strong(password):
     """Validate password strength."""
     if len(password) < 8:

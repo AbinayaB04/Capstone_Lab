@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Request, Header
 from pydantic import BaseModel
 from database.mongo_manager import verify_login, update_password, log_audit_action
-from database.redis_manager import blacklist_token, is_token_blacklisted
+from database.redis_manager import blacklist_token, is_token_blacklisted, set_active_session
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 import jwt
@@ -76,6 +76,13 @@ async def login(request: Request, login_req: LoginRequest):
     access_token = create_jwt(user_data, expires_delta=datetime.timedelta(minutes=15), token_type="access")
     refresh_token = create_jwt(user_data, expires_delta=datetime.timedelta(days=7), token_type="refresh")
     
+    # Enforce single concurrent session: revoke previous session
+    set_active_session(login_req.username, access_token)
+    
+    # Check policy: enforce MFA awareness for privileged roles
+    if user_data.get("role") in ["admin", "staff", "department_admin"] and not user_data.get("two_factor_enabled"):
+        user_data["prompt_mfa_setup"] = True
+    
     user_data["_id"] = str(user_data.get("_id", ""))
     for key in ["department_id", "branch_id"]:
         if user_data.get(key):
@@ -98,9 +105,13 @@ async def confirm_2fa(req: VerifyEnable2FARequest):
     from database.mongo_manager import enable_user_2fa
     totp = pyotp.TOTP(req.secret)
     if totp.verify(str(req.code).strip(), valid_window=1):
-        enable_user_2fa(req.username, req.secret)
+        backup_codes = enable_user_2fa(req.username, req.secret)
         log_audit_action(req.username, "2FA_ENABLED", "system", "User enabled 2FA")
-        return {"status": "success", "message": "2FA successfully enabled."}
+        return {
+            "status": "success", 
+            "message": "2FA successfully enabled.", 
+            "backup_codes": backup_codes
+        }
     raise HTTPException(status_code=400, detail="Invalid 2FA code. Please verify and try again.")
 
 @router.post("/2fa/disable")

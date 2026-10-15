@@ -427,26 +427,53 @@ def get_all_courses_with_details():
             c["department_name"] = ""
     return courses
 
-# --- Two-Factor Authentication (TOTP) ---
-def enable_user_2fa(username, secret):
-    """Enable 2FA for a user with the provided TOTP secret."""
+# --- Two-Factor Authentication (TOTP) & Backup Codes ---
+def generate_backup_codes(username: str, count: int = 8) -> list:
+    """Generates single-use alphanumeric backup codes and stores SHA-256 hashes in MongoDB."""
+    import secrets
+    import hashlib
     import re
+    codes = []
+    hashes = []
+    for _ in range(count):
+        # Format: ABCD-EFGH
+        part1 = secrets.token_hex(2).upper()
+        part2 = secrets.token_hex(2).upper()
+        code = f"{part1}-{part2}"
+        codes.append(code)
+        code_hash = hashlib.sha256(code.encode('utf-8')).hexdigest()
+        hashes.append(code_hash)
+        
+    users_col.update_one(
+        {"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}},
+        {"$set": {"two_factor_backup_codes": hashes}}
+    )
+    return codes
+
+def enable_user_2fa(username: str, secret: str):
+    """Enable 2FA for a user with the provided TOTP secret and generate backup codes."""
+    import re
+    backup_codes = generate_backup_codes(username, count=8)
     res = users_col.update_one(
         {"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}},
         {"$set": {"two_factor_enabled": True, "two_factor_secret": secret}}
     )
-    return res.modified_count > 0
+    return backup_codes if res.modified_count > 0 or res.matched_count > 0 else []
 
-def disable_user_2fa(username):
-    """Disable 2FA for a user."""
+def disable_user_2fa(username: str):
+    """Disable 2FA for a user and clear secret and backup codes."""
     import re
     res = users_col.update_one(
         {"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}},
-        {"$set": {"two_factor_enabled": False, "two_factor_secret": None}}
+        {"$set": {
+            "two_factor_enabled": False, 
+            "two_factor_secret": None,
+            "two_factor_backup_codes": []
+        }}
     )
     return res.modified_count > 0
 
-def get_user_2fa_secret(username):
+def get_user_2fa_secret(username: str):
     """Retrieve user's 2FA secret if enabled."""
     import re
     user = users_col.find_one({"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
@@ -454,18 +481,55 @@ def get_user_2fa_secret(username):
         return user.get("two_factor_secret")
     return None
 
-def verify_totp(username, totp_code):
-    """Verifies a 6-digit TOTP code against the user's secret."""
+def verify_totp(username: str, totp_code: str) -> bool:
+    """
+    Verifies a 6-digit TOTP code against the user's secret,
+    OR verifies and consumes a single-use backup recovery code.
+    """
     import pyotp
     import re
+    import hashlib
+    clean_code = str(totp_code).strip()
     user = users_col.find_one({"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
     if not user or not user.get("two_factor_enabled"):
         return True # Not required
+        
+    # 1. Try TOTP authenticator verification
     secret = user.get("two_factor_secret")
-    if not secret:
+    if secret:
+        try:
+            totp = pyotp.TOTP(secret)
+            if totp.verify(clean_code, valid_window=1):
+                return True
+        except Exception:
+            pass
+            
+    # 2. Try single-use backup recovery code
+    backup_hashes = user.get("two_factor_backup_codes", [])
+    if backup_hashes:
+        candidate_hash = hashlib.sha256(clean_code.upper().encode('utf-8')).hexdigest()
+        if candidate_hash in backup_hashes:
+            # Atomically consume the single-use backup code
+            users_col.update_one(
+                {"_id": user["_id"]},
+                {"$pull": {"two_factor_backup_codes": candidate_hash}}
+            )
+            log_audit_action(username, "BACKUP_CODE_USED", "system", "Single-use 2FA backup recovery code consumed")
+            return True
+
+    return False
+
+def unlock_user_account(username: str) -> bool:
+    """Unlocks a locked out user account and resets failed attempts."""
+    import re
+    res = users_col.update_one(
+        {"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}},
+        {"$set": {"locked_out": False, "failed_attempts": 0}}
+    )
+    if res.modified_count > 0 or res.matched_count > 0:
+        log_audit_action(username, "ACCOUNT_UNLOCKED", "admin", "Account unlocked by administrator")
         return True
-    totp = pyotp.TOTP(secret)
-    return totp.verify(str(totp_code).strip(), valid_window=1)
+    return False
 
 # Initialize seeding on import
 init_mongo_db()

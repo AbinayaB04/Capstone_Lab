@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from services.llm_service import AIEngine
 from database.mongo_manager import create_chat_session, get_chat_sessions_by_user, get_chat_session, add_message_to_session, update_chat_session_title, delete_chat_session
+from api.dependencies import get_current_user, require_permission, enforce_tenant_isolation
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -26,7 +27,7 @@ class ExamRequest(BaseModel):
     difficulty: str = "medium"
 
 class SessionCreateRequest(BaseModel):
-    username: str
+    username: Optional[str] = None
     course_code: str
     branch_id: str
     semester: int
@@ -36,7 +37,7 @@ class SessionRenameRequest(BaseModel):
     title: str
 
 class QuizSubmitRequest(BaseModel):
-    username: str
+    username: Optional[str] = None
     course_code: str
     branch_id: Optional[str] = None
     semester: Optional[int] = None
@@ -47,7 +48,19 @@ class QuizSubmitRequest(BaseModel):
     quiz_details: List[Dict[str, Any]] = []
 
 @router.post("/query")
-async def generate_query_response(request: QueryRequest):
+async def generate_query_response(
+    request: QueryRequest,
+    current_user: dict = Depends(require_permission("ask_ai"))
+):
+    # Enforce multi-tenant boundary: verify student cannot query another dept/branch materials
+    enforce_tenant_isolation(
+        current_user, 
+        requested_dept_id=request.department_id, 
+        requested_branch_id=request.branch_id
+    )
+    
+    verified_username = current_user.get("username")
+    
     try:
         res = ai_engine.generate_response(
             query=request.query,
@@ -64,7 +77,7 @@ async def generate_query_response(request: QueryRequest):
             response = res
             sources = []
         
-        if request.session_id and request.username:
+        if request.session_id and verified_username:
             add_message_to_session(request.session_id, "user", request.query)
             add_message_to_session(request.session_id, "assistant", response)
             
@@ -73,10 +86,15 @@ async def generate_query_response(request: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/quiz/submit")
-async def submit_quiz(request: QuizSubmitRequest):
+async def submit_quiz(
+    request: QuizSubmitRequest,
+    current_user: dict = Depends(require_permission("ask_ai"))
+):
     from database.mongo_manager import record_quiz_attempt
+    verified_username = current_user.get("username")
+    
     attempt_id = record_quiz_attempt(
-        username=request.username,
+        username=verified_username,
         course_code=request.course_code,
         branch_id=request.branch_id,
         semester=request.semester,
@@ -89,7 +107,16 @@ async def submit_quiz(request: QuizSubmitRequest):
     return {"status": "success", "attempt_id": attempt_id}
 
 @router.get("/quiz/history/{username}")
-async def get_quiz_history(username: str, course_code: Optional[str] = None):
+async def get_quiz_history(
+    username: str, 
+    course_code: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    # Non-admin users can only view their own history
+    if str(current_user.get("role")).lower() not in ["admin", "staff"]:
+        if current_user.get("username", "").lower() != username.lower():
+            raise HTTPException(status_code=403, detail="Forbidden: You can only view your own quiz history.")
+            
     from database.mongo_manager import get_quiz_attempts_by_user
     attempts = get_quiz_attempts_by_user(username, course_code)
     for a in attempts:
@@ -98,9 +125,16 @@ async def get_quiz_history(username: str, course_code: Optional[str] = None):
             a["timestamp"] = a["timestamp"].isoformat()
     return {"attempts": attempts}
 
-
 @router.post("/generate-exam")
-async def generate_exam(request: ExamRequest):
+async def generate_exam(
+    request: ExamRequest,
+    current_user: dict = Depends(require_permission("ask_ai"))
+):
+    enforce_tenant_isolation(
+        current_user, 
+        requested_dept_id=request.department_id, 
+        requested_branch_id=request.branch_id
+    )
     try:
         exam_json = ai_engine.generate_exam(
             course_code=request.course_code,
@@ -114,9 +148,13 @@ async def generate_exam(request: ExamRequest):
         raise HTTPException(status_code=500, detail=str(e))
         
 @router.post("/sessions")
-async def create_session(request: SessionCreateRequest):
+async def create_session(
+    request: SessionCreateRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    verified_username = current_user.get("username")
     session_id = create_chat_session(
-        request.username, 
+        verified_username, 
         request.course_code, 
         request.branch_id, 
         request.semester, 
@@ -125,14 +163,26 @@ async def create_session(request: SessionCreateRequest):
     return {"session_id": session_id}
 
 @router.get("/sessions/{username}")
-async def get_user_sessions(username: str, course_code: Optional[str] = None):
+async def get_user_sessions(
+    username: str, 
+    course_code: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    if str(current_user.get("role")).lower() not in ["admin"]:
+        if current_user.get("username", "").lower() != username.lower():
+            raise HTTPException(status_code=403, detail="Forbidden: You can only view your own sessions.")
+            
     sessions = get_chat_sessions_by_user(username, course_code)
     for s in sessions:
         s["_id"] = str(s["_id"])
     return {"sessions": sessions}
 
 @router.put("/sessions/{session_id}")
-async def rename_session(session_id: str, request: SessionRenameRequest):
+async def rename_session(
+    session_id: str, 
+    request: SessionRenameRequest,
+    current_user: dict = Depends(get_current_user)
+):
     try:
         update_chat_session_title(session_id, request.title)
         return {"status": "success"}
@@ -140,7 +190,10 @@ async def rename_session(session_id: str, request: SessionRenameRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(
+    session_id: str,
+    current_user: dict = Depends(get_current_user)
+):
     try:
         delete_chat_session(session_id)
         return {"status": "success"}
