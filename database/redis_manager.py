@@ -137,3 +137,23 @@ def set_active_session(username: str, token: str, expires_in: int = 14400):
     except Exception as e:
         print(f"Redis active session tracking error: {e}")
 
+def revoke_user_sessions(username: str, expires_in: int = 14400) -> bool:
+    """
+    Real-time session killswitch (The Leaver Phase).
+    Immediately invalidates active JWTs in Redis when an account is suspended or terminated.
+    """
+    client = get_redis_client()
+    try:
+        active_key = f"active_session:{username.lower()}"
+        active_token = client.get(active_key)
+        if active_token:
+            token_str = active_token.decode('utf-8') if isinstance(active_token, bytes) else str(active_token)
+            client.set(f"blacklist:{token_str}", "true", ex=expires_in)
+            client.delete(active_key)
+            return True
+        return False
+    except Exception as e:
+        print(f"Redis revoke user sessions error: {e}")
+        return False
+
+

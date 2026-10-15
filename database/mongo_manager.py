@@ -102,6 +102,15 @@ def verify_login(username, password):
     import re
     user = users_col.find_one({"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
     if user:
+        # 1. Check account suspension (The Leaver Phase)
+        if user.get("is_active", True) is False:
+            return False, "Account is deactivated/suspended. Please contact the administrator."
+            
+        # 2. Check alumni status
+        if user.get("status") == "alumni":
+            return False, "Academic tenure complete (Alumni status). Access is archived."
+
+        # 3. Check brute-force lockout
         if user.get("locked_out", False):
             return False, "Account locked out due to too many failed attempts. Contact admin."
             
@@ -110,7 +119,7 @@ def verify_login(username, password):
             import datetime
             try:
                 if bcrypt.checkpw(password.encode('utf-8'), user["password_hash"].encode('utf-8')):
-                    # Check password expiration (90 days)
+                    # Check password expiration (90 days - Maintainer Phase)
                     last_change = user.get("last_password_change")
                     if last_change:
                         if isinstance(last_change, datetime.datetime):
@@ -118,6 +127,14 @@ def verify_login(username, password):
                                 return False, "Password expired. Please contact admin to reset."
                     
                     users_col.update_one({"username": username}, {"$set": {"failed_attempts": 0}})
+                    
+                    # 4. Check & Apply Time-Based Promotion (The Mover Phase)
+                    if user.get("role") == "student":
+                        promo_res = check_and_apply_auto_promotion(username)
+                        if promo_res.get("promoted"):
+                            user["semester"] = promo_res.get("new_semester", user.get("semester"))
+                            user["status"] = promo_res.get("status", user.get("status", "active"))
+                            
                     return True, user
                 else:
                     failed = user.get("failed_attempts", 0) + 1
@@ -184,13 +201,14 @@ def get_branches_by_department(dept_id):
 def get_courses_by_branch_and_sem(branch_id, sem_num):
     return list(courses_col.find({"branch_id": branch_id, "semester_number": sem_num}))
 
-def add_user(name, user_id, role, dob_str, department_id, branch_id, semester, password):
+def add_user(name, user_id, role, dob_str, department_id, branch_id, semester, password, enrollment_date=None):
     try:
         import bcrypt
         if users_col.find_one({"username": user_id}):
             return False, "User ID already exists"
             
         hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
         
         users_col.insert_one({
             "username": user_id,
@@ -200,13 +218,121 @@ def add_user(name, user_id, role, dob_str, department_id, branch_id, semester, p
             "dob": dob_str,
             "department_id": department_id,
             "branch_id": branch_id,
-            "semester": semester,
+            "semester": int(semester) if semester else 1,
+            "enrollment_date": enrollment_date or now_utc,
+            "is_active": True,
+            "status": "active",
+            "promotion_hold": False,
             "password_history": [hashed_pw],
-            "last_password_change": datetime.datetime.now(datetime.timezone.utc)
+            "last_password_change": now_utc
         })
         return True, "Success"
     except Exception as e:
         return False, str(e)
+
+# --- IAM Lifecycle: Time-Based Promotion & Account Governance ---
+
+def calculate_current_semester(enrollment_date, current_date=None) -> int:
+    """
+    Computes the expected academic semester based on elapsed 6-month terms.
+    Odd semesters: July - December; Even semesters: January - June.
+    Assumes standard term length ~ 182.5 days (6 months).
+    Returns calculated semester 1 to 9 (where 9 = Completed/Alumni).
+    """
+    import datetime
+    if not enrollment_date:
+        return 1
+    if current_date is None:
+        current_date = datetime.datetime.now(datetime.timezone.utc)
+    if isinstance(enrollment_date, str):
+        try:
+            enrollment_date = datetime.datetime.fromisoformat(enrollment_date)
+        except Exception:
+            return 1
+    if enrollment_date.tzinfo is None:
+        enrollment_date = enrollment_date.replace(tzinfo=datetime.timezone.utc)
+    if current_date.tzinfo is None:
+        current_date = current_date.replace(tzinfo=datetime.timezone.utc)
+        
+    days_elapsed = max(0, (current_date - enrollment_date).days)
+    terms_elapsed = int(days_elapsed // 182.5)
+    return min(9, terms_elapsed + 1)
+
+def check_and_apply_auto_promotion(username: str, current_date=None) -> dict:
+    """
+    Evaluates time-based semester progression for a student (The Mover Phase).
+    If student has elapsed into a new term and promotion_hold is False,
+    automatically advances the semester or transitions to Alumni if > 8.
+    """
+    import re
+    user = users_col.find_one({"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
+    if not user or user.get("role") != "student":
+        return {"promoted": False, "reason": "Not a student"}
+        
+    if user.get("promotion_hold", False):
+        return {"promoted": False, "reason": "Academic hold active"}
+        
+    current_sem = user.get("semester") or 1
+    enrollment = user.get("enrollment_date") or user.get("last_password_change")
+    calculated_sem = calculate_current_semester(enrollment, current_date=current_date)
+    
+    if calculated_sem > current_sem:
+        if calculated_sem <= 8:
+            users_col.update_one(
+                {"_id": user["_id"]},
+                {"$set": {"semester": calculated_sem}}
+            )
+            log_audit_action(username, "AUTO_PROMOTION_APPLIED", "system", f"Promoted from Sem {current_sem} to Sem {calculated_sem} (Time-Based)")
+            return {"promoted": True, "new_semester": calculated_sem, "status": "active"}
+        else:
+            # Beyond semester 8: transition to Alumni (The Leaver Phase)
+            users_col.update_one(
+                {"_id": user["_id"]},
+                {"$set": {"semester": 8, "status": "alumni"}}
+            )
+            log_audit_action(username, "TENURE_COMPLETED_ALUMNI", "system", "Student completed 8 semesters; transitioned to Alumni")
+            return {"promoted": True, "new_semester": 8, "status": "alumni"}
+            
+    return {"promoted": False, "current_semester": current_sem}
+
+def promote_student_semester(username: str, new_semester: int) -> bool:
+    """Manual administrator promotion override."""
+    import re
+    res = users_col.update_one(
+        {"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}},
+        {"$set": {"semester": int(new_semester)}}
+    )
+    if res.modified_count > 0 or res.matched_count > 0:
+        log_audit_action(username, "SEMESTER_PROMOTED_MANUAL", "admin", f"Semester manually updated to {new_semester}")
+        return True
+    return False
+
+def toggle_promotion_hold(username: str, hold: bool) -> bool:
+    """Toggles academic hold on a student to freeze/unfreeze time-based promotion."""
+    import re
+    res = users_col.update_one(
+        {"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}},
+        {"$set": {"promotion_hold": hold}}
+    )
+    if res.modified_count > 0 or res.matched_count > 0:
+        action = "PROMOTION_HOLD_ENABLED" if hold else "PROMOTION_HOLD_REMOVED"
+        log_audit_action(username, action, "admin", f"Academic hold set to {hold}")
+        return True
+    return False
+
+def toggle_user_status(username: str, is_active: bool) -> bool:
+    """Soft-deprovisioning / suspension toggle (The Leaver Phase). Preserves records while controlling access."""
+    import re
+    status_str = "active" if is_active else "suspended"
+    res = users_col.update_one(
+        {"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}},
+        {"$set": {"is_active": is_active, "status": status_str}}
+    )
+    if res.modified_count > 0 or res.matched_count > 0:
+        action = "USER_ACTIVATED" if is_active else "USER_SUSPENDED"
+        log_audit_action(username, action, "admin", f"Account status set to {status_str}")
+        return True
+    return False
 
 def get_all_users():
     users = list(users_col.find({}))
@@ -223,6 +349,9 @@ def get_all_users():
             u["branch_name"] = b["branch_name"] if b else ""
         else:
             u["branch_name"] = ""
+            
+        u["status"] = u.get("status", "active" if u.get("is_active", True) else "suspended")
+        u["promotion_hold"] = "Yes" if u.get("promotion_hold", False) else "No"
     return users
 
 def delete_user(user_id):

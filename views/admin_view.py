@@ -25,8 +25,13 @@ from database.mongo_manager import (
     update_password,
     get_user_2fa_secret,
     enable_user_2fa,
-    disable_user_2fa
+    disable_user_2fa,
+    promote_student_semester,
+    toggle_promotion_hold,
+    toggle_user_status,
+    calculate_current_semester
 )
+from database.redis_manager import revoke_user_sessions
 
 def render_admin_view():
     user = st.session_state.get("user", {})
@@ -237,24 +242,78 @@ def render_admin_view():
             # Display as a dataframe
             df = pd.DataFrame(users)
             # Check if required columns exist before ordering (in case some docs miss fields)
-            cols = ["_id", "role", "name", "username", "department_name", "branch_name", "semester"]
+            cols = ["_id", "role", "name", "username", "department_name", "branch_name", "semester", "status", "promotion_hold"]
             for c in cols:
                 if c not in df.columns:
                     df[c] = ""
             df = df[cols]
-            df.columns = ["Mongo ID", "Role", "Name", "User ID", "Department", "Branch", "Semester"]
+            df.columns = ["Mongo ID", "Role", "Name", "User ID", "Department", "Branch", "Semester", "Status", "Hold"]
             
             st.dataframe(df, use_container_width=True, hide_index=True)
             
             st.divider()
-            st.subheader("Manage Accounts (IAM)")
-            iam_action = st.selectbox("Select Action", ["Select Action", "Unlock Account", "Force Password Reset", "Delete User"])
+            st.subheader("Manage Accounts (IAM Lifecycle)")
+            iam_action = st.selectbox(
+                "Select Action", 
+                [
+                    "Select Action", 
+                    "Promote Semester (Mover Phase)", 
+                    "Toggle Academic Hold (Mover Phase)",
+                    "Suspend / Reactivate User (Leaver Phase)",
+                    "Unlock Account", 
+                    "Force Password Reset", 
+                    "Delete User"
+                ]
+            )
             
             if iam_action != "Select Action":
                 user_ids = df["User ID"].tolist()
                 selected_uid = st.selectbox("Select User ID", [""] + user_ids)
+                target_doc = users_col.find_one({"username": selected_uid}) if selected_uid else None
                 
-                if iam_action == "Unlock Account":
+                if iam_action == "Promote Semester (Mover Phase)":
+                    if target_doc:
+                        curr_sem = target_doc.get("semester", 1)
+                        enrollment = target_doc.get("enrollment_date")
+                        calc_sem = calculate_current_semester(enrollment)
+                        st.info(f"🎓 **Student:** {selected_uid} | **Current Sem:** {curr_sem} | **Time-Based Calculated Sem:** {calc_sem}")
+                        new_sem_input = st.selectbox("Select Target Semester", [1, 2, 3, 4, 5, 6, 7, 8], index=min(7, curr_sem if curr_sem < 8 else 7))
+                        if st.button("Promote Student Semester", type="primary"):
+                            if promote_student_semester(selected_uid, new_sem_input):
+                                st.success(f"Successfully promoted {selected_uid} to Semester {new_sem_input}!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to update semester.")
+                                
+                elif iam_action == "Toggle Academic Hold (Mover Phase)":
+                    if target_doc:
+                        current_hold = target_doc.get("promotion_hold", False)
+                        st.info(f"Current Academic Hold Status: **{'ACTIVE (Promotion Frozen)' if current_hold else 'NO HOLD (Auto-Promotion Active)'}**")
+                        btn_label = "Remove Academic Hold" if current_hold else "Place on Academic Hold"
+                        if st.button(btn_label, type="primary"):
+                            toggle_promotion_hold(selected_uid, not current_hold)
+                            st.success(f"Academic hold updated for {selected_uid}.")
+                            st.rerun()
+                            
+                elif iam_action == "Suspend / Reactivate User (Leaver Phase)":
+                    if target_doc:
+                        is_active = target_doc.get("is_active", True)
+                        st.info(f"Current Account State: **{'ACTIVE' if is_active else 'SUSPENDED / DEACTIVATED'}**")
+                        if is_active:
+                            st.warning("Suspending this user will immediately revoke all active JWT sessions in Redis and block logins.")
+                            if st.button("Suspend Account & Kill Sessions", type="primary"):
+                                toggle_user_status(selected_uid, False)
+                                revoke_user_sessions(selected_uid)
+                                st.success(f"User {selected_uid} has been suspended and active sessions revoked.")
+                                st.rerun()
+                        else:
+                            st.success("Reactivating will restore normal login capabilities.")
+                            if st.button("Reactivate Account", type="primary"):
+                                toggle_user_status(selected_uid, True)
+                                st.success(f"User {selected_uid} has been reactivated.")
+                                st.rerun()
+
+                elif iam_action == "Unlock Account":
                     st.info("Unlocking an account will reset their failed login attempts.")
                     if st.button("Unlock Account", type="primary") and selected_uid:
                         users_col.update_one({"username": selected_uid}, {"$set": {"locked_out": False, "failed_attempts": 0}})
