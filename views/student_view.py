@@ -6,7 +6,7 @@ from streamlit_option_menu import option_menu
 from auth.session_manager import logout_user, get_auth_headers
 from utils.image_utils import get_base64_of_bin_file
 from services.llm_service import AIEngine
-from database.mongo_manager import get_branches_by_department, get_courses_by_branch_and_sem, get_documents_by_course, get_file_from_gridfs
+from database.mongo_manager import get_branches_by_department, get_courses_by_branch_and_sem, get_documents_by_course, get_file_from_gridfs, get_course_by_code
 from bson.objectid import ObjectId
 
 def load_lottieurl(url: str):
@@ -216,15 +216,17 @@ def render_student_view():
                 key="student_branch_select"
             )
             
-        # 2. Semester Dropdown
+        # 2. Semester (Locked strictly to enrolled semester)
         with col2:
-            semesters = [1, 2, 3, 4, 5, 6, 7, 8]
-            default_sem_index = semesters.index(user_semester) if user_semester in semesters else 0
-            
-            selected_semester = st.selectbox(
-                "Select Semester",
-                options=semesters,
-                index=default_sem_index,
+            student_sem = int(user_semester) if user_semester else 1
+            selected_semester = student_sem
+            st.selectbox(
+                "Enrolled Semester",
+                options=[student_sem],
+                format_func=lambda s: f"Semester {s} (Enrolled)",
+                index=0,
+                disabled=True,
+                help="Access is restricted strictly to your enrolled semester.",
                 key="student_sem_select"
             )
             
@@ -252,6 +254,12 @@ def render_student_view():
         if not (selected_branch_id and selected_semester and selected_course_code):
             st.warning("Please select a Branch, Semester, and Course to access the AI Engine.")
             return # Halt rendering
+            
+        # Security validation: Ensure selected course matches enrolled semester
+        course_obj = get_course_by_code(selected_course_code)
+        if course_obj and course_obj.get("semester_number") and int(course_obj["semester_number"]) != selected_semester:
+            st.error("⛔ Access Forbidden: You cannot access course materials outside your enrolled semester.")
+            return
             
         # Store active context
         st.session_state["active_course_context"] = selected_course_code
@@ -395,12 +403,15 @@ def render_student_view():
             )
             
         with col2:
-            semesters = [1, 2, 3, 4, 5, 6, 7, 8]
-            default_sem_index = semesters.index(user_semester) if user_semester in semesters else 0
-            selected_semester = st.selectbox(
-                "Select Semester", 
-                options=semesters, 
-                index=default_sem_index, 
+            student_sem = int(user_semester) if user_semester else 1
+            selected_semester = student_sem
+            st.selectbox(
+                "Enrolled Semester", 
+                options=[student_sem], 
+                format_func=lambda s: f"Semester {s} (Enrolled)",
+                index=0, 
+                disabled=True,
+                help="Access is restricted strictly to your enrolled semester.",
                 key="mc_sem_select"
             )
             
@@ -422,11 +433,15 @@ def render_student_view():
         st.divider()
         
         if selected_course_code:
-            docs = get_documents_by_course(selected_course_code)
-            if not docs:
-                st.info("No documents have been uploaded for this course yet.")
+            course_obj = get_course_by_code(selected_course_code)
+            if course_obj and course_obj.get("semester_number") and int(course_obj["semester_number"]) != selected_semester:
+                st.error("⛔ Access Forbidden: You cannot access documents outside your enrolled semester.")
             else:
-                for doc in docs:
+                docs = get_documents_by_course(selected_course_code)
+                if not docs:
+                    st.info("No documents have been uploaded for this course yet.")
+                else:
+                    for doc in docs:
                     with st.container():
                         col_doc1, col_doc2 = st.columns([4, 1])
                         with col_doc1:
@@ -478,12 +493,15 @@ def render_student_view():
             )
             
         with col2:
-            semesters = [1, 2, 3, 4, 5, 6, 7, 8]
-            default_sem_index = semesters.index(int(user_semester)) if user_semester and int(user_semester) in semesters else 0
-            selected_semester = st.selectbox(
-                "Select Semester", 
-                options=semesters, 
-                index=default_sem_index, 
+            student_sem = int(user_semester) if user_semester else 1
+            selected_semester = student_sem
+            st.selectbox(
+                "Enrolled Semester", 
+                options=[student_sem], 
+                format_func=lambda s: f"Semester {s} (Enrolled)",
+                index=0, 
+                disabled=True,
+                help="Access is restricted strictly to your enrolled semester.",
                 key="pe_sem_select"
             )
             
@@ -504,6 +522,11 @@ def render_student_view():
             options=list(course_options.keys()),
             format_func=lambda x: f"{x}: {course_options[x]}"
         )
+
+        course_obj = get_course_by_code(selected_course)
+        if course_obj and course_obj.get("semester_number") and int(course_obj["semester_number"]) != selected_semester:
+            st.error("⛔ Access Forbidden: You cannot generate quizzes for courses outside your enrolled semester.")
+            st.stop()
 
         
         c_opt1, c_opt2 = st.columns(2)

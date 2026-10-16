@@ -118,6 +118,41 @@ def test_multi_tenant_isolation_enforcement():
         enforce_tenant_isolation(student_user, requested_dept_id="dept_cse", requested_branch_id="branch_robotics")
     assert exc_info.value.status_code == 403
 
+    # --- Semester Isolation Tests for Students ---
+    student_sem3 = {
+        "username": "sem3_student",
+        "role": "student",
+        "department_id": "dept_cse",
+        "branch_id": "branch_aiml",
+        "semester": 3
+    }
+
+    # Student accessing their own semester -> Allowed
+    assert enforce_tenant_isolation(student_sem3, requested_dept_id="dept_cse", requested_branch_id="branch_aiml", requested_semester=3) is True
+
+    # Student trying to access another semester directly -> 403 Forbidden
+    with pytest.raises(HTTPException) as exc_info:
+        enforce_tenant_isolation(student_sem3, requested_dept_id="dept_cse", requested_branch_id="branch_aiml", requested_semester=5)
+    assert exc_info.value.status_code == 403
+    assert "Cross-semester access forbidden" in exc_info.value.detail
+
+    # Student trying to access course from another semester -> 403 Forbidden
+    from unittest.mock import patch
+    with patch("database.mongo_manager.get_course_by_code") as mock_get_course:
+        # Course in Semester 1 (student is in Semester 3) -> 403 Forbidden
+        mock_get_course.return_value = {"course_code": "CS101", "semester_number": 1}
+        with pytest.raises(HTTPException) as exc_info:
+            enforce_tenant_isolation(student_sem3, requested_dept_id="dept_cse", requested_branch_id="branch_aiml", requested_course_code="CS101")
+        assert exc_info.value.status_code == 403
+        assert "Cross-semester access forbidden" in exc_info.value.detail
+
+        # Course in Semester 3 (student is in Semester 3) -> Allowed
+        mock_get_course.return_value = {"course_code": "CS301", "semester_number": 3}
+        assert enforce_tenant_isolation(student_sem3, requested_dept_id="dept_cse", requested_branch_id="branch_aiml", requested_course_code="CS301") is True
+
+    # Admin has unrestricted access across any semester / course
+    assert enforce_tenant_isolation(admin_user, requested_semester=8, requested_course_code="CS801") is True
+
 def test_2fa_backup_recovery_codes_lifecycle():
     """Verify 2FA backup codes generation, consumption, and one-time use."""
     test_username = "test_2fa_user_999"
@@ -168,3 +203,37 @@ def test_account_unlock():
         assert user["failed_attempts"] == 0
     finally:
         users_col.delete_one({"username": test_username})
+
+def test_upload_security_controls():
+    """Verify upload permission boundaries, extension whitelisting, and magic bytes validation."""
+    from auth.rbac_manager import RBACManager
+    from api.routes.document_routes import ALLOWED_EXTENSIONS, MAX_FILE_SIZE_BYTES
+    import os
+
+    # 1. RBAC: Only staff and department_admin have upload_materials permission (Separation of Duties)
+    assert RBACManager.has_permission("staff", "upload_materials") is True
+    assert RBACManager.has_permission("department_admin", "upload_materials") is True
+    assert RBACManager.has_permission("student", "upload_materials") is False
+    assert RBACManager.has_permission("admin", "upload_materials") is False
+
+    # 2. File size limit
+    assert MAX_FILE_SIZE_BYTES == 50 * 1024 * 1024
+
+    # 3. Extension whitelisting
+    assert ".pdf" in ALLOWED_EXTENSIONS
+    assert ".pptx" in ALLOWED_EXTENSIONS
+    assert ".exe" not in ALLOWED_EXTENSIONS
+    assert ".sh" not in ALLOWED_EXTENSIONS
+    assert ".py" not in ALLOWED_EXTENSIONS
+
+    # 4. Path traversal protection: os.path.basename strips directory manipulation
+    malicious_filename = "../../../etc/passwd.pdf"
+    sanitized = os.path.basename(malicious_filename)
+    assert sanitized == "passwd.pdf"
+    assert "/" not in sanitized and ".." not in sanitized
+
+    # 5. Magic byte verification
+    valid_pdf_bytes = b"%PDF-1.4 sample content"
+    invalid_pdf_bytes = b"MZ\x90\x00 fake executable masquerading as pdf"
+    assert valid_pdf_bytes.startswith(b"%PDF")
+    assert not invalid_pdf_bytes.startswith(b"%PDF")

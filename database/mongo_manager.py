@@ -38,65 +38,68 @@ def log_audit_action(username: str, action_type: str, target: str, details: str 
 
 def init_mongo_db():
     """Seed the database with initial multi-tenant context mapping if empty."""
-    if departments_col.count_documents({}) == 0:
-        print("Seeding initial MongoDB database...")
-        
-        # 1. Seed Departments
-        dept_cs = departments_col.insert_one({"dept_name": "School of Computer Science & Engineering"}).inserted_id
-        dept_mech = departments_col.insert_one({"dept_name": "School of Mechanical Engineering"}).inserted_id
-        
-        # 2. Seed Branches
-        branch_cse = branches_col.insert_one({
-            "branch_name": "B.E. Computer Science and Engineering", 
-            "department_id": dept_cs
-        }).inserted_id
-        branch_it = branches_col.insert_one({
-            "branch_name": "B.Tech Information Technology", 
-            "department_id": dept_cs
-        }).inserted_id
-        
-        # 3. Seed Courses
-        courses_col.insert_many([
-            {"course_code": "CS101", "course_name": "Introduction to Programming", "branch_id": branch_cse, "semester_number": 1},
-            {"course_code": "CS301", "course_name": "Data Structures", "branch_id": branch_cse, "semester_number": 3},
-            {"course_code": "CS501", "course_name": "Artificial Intelligence", "branch_id": branch_cse, "semester_number": 5},
-            {"course_code": "IT302", "course_name": "Web Technologies", "branch_id": branch_it, "semester_number": 3},
-        ])
-        
-        # 4. Seed initial Users
-        # Admin
-        users_col.insert_one({
-            "username": "admin",
-            "password_hash": "pass", # Note: Hash passwords in production
-            "name": "Super Admin",
-            "role": "admin",
-            "department_id": None,
-            "branch_id": None,
-            "semester": None
-        })
-        
-        # Sample Student
-        users_col.insert_one({
-            "username": "test",
-            "password_hash": "1234",
-            "name": "Test Student",
-            "role": "student",
-            "department_id": dept_cs,
-            "branch_id": branch_cse,
-            "semester": 5
-        })
+    try:
+        if departments_col.count_documents({}) == 0:
+            print("Seeding initial MongoDB database...")
+            
+            # 1. Seed Departments
+            dept_cs = departments_col.insert_one({"dept_name": "School of Computer Science & Engineering"}).inserted_id
+            dept_mech = departments_col.insert_one({"dept_name": "School of Mechanical Engineering"}).inserted_id
+            
+            # 2. Seed Branches
+            branch_cse = branches_col.insert_one({
+                "branch_name": "B.E. Computer Science and Engineering", 
+                "department_id": dept_cs
+            }).inserted_id
+            branch_it = branches_col.insert_one({
+                "branch_name": "B.Tech Information Technology", 
+                "department_id": dept_cs
+            }).inserted_id
+            
+            # 3. Seed Courses
+            courses_col.insert_many([
+                {"course_code": "CS101", "course_name": "Introduction to Programming", "branch_id": branch_cse, "semester_number": 1},
+                {"course_code": "CS301", "course_name": "Data Structures", "branch_id": branch_cse, "semester_number": 3},
+                {"course_code": "CS501", "course_name": "Artificial Intelligence", "branch_id": branch_cse, "semester_number": 5},
+                {"course_code": "IT302", "course_name": "Web Technologies", "branch_id": branch_it, "semester_number": 3},
+            ])
+            
+            # 4. Seed initial Users
+            # Admin
+            users_col.insert_one({
+                "username": "admin",
+                "password_hash": "pass", # Note: Hash passwords in production
+                "name": "Super Admin",
+                "role": "admin",
+                "department_id": None,
+                "branch_id": None,
+                "semester": None
+            })
+            
+            # Sample Student
+            users_col.insert_one({
+                "username": "test",
+                "password_hash": "1234",
+                "name": "Test Student",
+                "role": "student",
+                "department_id": dept_cs,
+                "branch_id": branch_cse,
+                "semester": 5
+            })
 
-        # Sample Staff
-        users_col.insert_one({
-            "username": "staff1",
-            "password_hash": "pass",
-            "name": "Prof. Smith",
-            "role": "staff",
-            "department_id": dept_cs,
-            "branch_id": None,
-            "semester": None
-        })
-        print("MongoDB Seeding Complete.")
+            # Sample Staff
+            users_col.insert_one({
+                "username": "staff1",
+                "password_hash": "pass",
+                "name": "Prof. Smith",
+                "role": "staff",
+                "department_id": dept_cs,
+                "branch_id": None,
+                "semester": None
+            })
+            print("MongoDB Seeding Complete.")
+    except Exception as e:
+        print(f"MongoDB init notice (offline / unreachable): {e}")
 
 def verify_login(username, password):
     import re
@@ -200,6 +203,10 @@ def get_branches_by_department(dept_id):
 
 def get_courses_by_branch_and_sem(branch_id, sem_num):
     return list(courses_col.find({"branch_id": branch_id, "semester_number": sem_num}))
+
+def get_course_by_code(course_code: str):
+    """Retrieve course details including semester_number by course_code."""
+    return courses_col.find_one({"course_code": course_code})
 
 def add_user(name, user_id, role, dob_str, department_id, branch_id, semester, password, enrollment_date=None):
     try:

@@ -90,13 +90,15 @@ def require_role(allowed_roles: list) -> Callable:
 def enforce_tenant_isolation(
     user: dict, 
     requested_dept_id: Optional[str] = None, 
-    requested_branch_id: Optional[str] = None
+    requested_branch_id: Optional[str] = None,
+    requested_semester: Optional[int] = None,
+    requested_course_code: Optional[str] = None
 ) -> bool:
     """
-    Validates that a user is not performing a cross-tenant privilege escalation.
-    - Admin: Global access across all departments and branches.
+    Validates that a user is not performing a cross-tenant or cross-semester privilege escalation.
+    - Admin: Global access across all departments, branches, and semesters.
     - Staff / Dept Admin: Scoped to their own department.
-    - Student: Strictly scoped to their own department and branch.
+    - Student: Strictly scoped to their own department, branch, and enrolled semester.
     """
     role = str(user.get("role", "")).lower()
     
@@ -105,6 +107,7 @@ def enforce_tenant_isolation(
         
     user_dept = str(user.get("department_id") or "")
     user_branch = str(user.get("branch_id") or "")
+    user_sem = user.get("semester")
     
     if requested_dept_id:
         req_dept_str = str(requested_dept_id)
@@ -121,5 +124,34 @@ def enforce_tenant_isolation(
                 status_code=403, 
                 detail="Cross-tenant access forbidden: Students can only access materials for their assigned branch."
             )
+
+    # Semester Isolation: Students can only access documents and courses in their enrolled semester
+    if role == "student":
+        # 1. Direct semester parameter validation
+        if requested_semester is not None and user_sem is not None:
+            try:
+                if int(requested_semester) != int(user_sem):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Cross-semester access forbidden: Students can only access Semester {user_sem} content."
+                    )
+            except (ValueError, TypeError):
+                pass
+                
+        # 2. Course-level semester validation
+        if requested_course_code and user_sem is not None:
+            from database.mongo_manager import get_course_by_code
+            course = get_course_by_code(requested_course_code)
+            if course:
+                course_sem = course.get("semester_number")
+                if course_sem is not None:
+                    try:
+                        if int(course_sem) != int(user_sem):
+                            raise HTTPException(
+                                status_code=403,
+                                detail=f"Cross-semester access forbidden: Course '{requested_course_code}' is in Semester {course_sem}, but you are enrolled in Semester {user_sem}."
+                            )
+                    except (ValueError, TypeError):
+                        pass
             
     return True

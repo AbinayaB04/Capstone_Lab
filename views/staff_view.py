@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 from streamlit_option_menu import option_menu
-from auth.session_manager import logout_user
+from auth.session_manager import logout_user, get_auth_headers
 from utils.image_utils import get_base64_of_bin_file
 import threading
 import uuid
@@ -257,7 +257,7 @@ def render_staff_view():
                         "role": user_profile.get("role", "staff")
                     }
                     try:
-                        res = requests.post(f"{API_BASE_URL}/documents/upload", files=files_to_upload, data=data)
+                        res = requests.post(f"{API_BASE_URL}/documents/upload", files=files_to_upload, data=data, headers=get_auth_headers())
                         if res.status_code == 200:
                             st.success(f"Queued {len(uploaded_files)} document(s) for background processing!")
                         else:
@@ -288,7 +288,7 @@ def render_staff_view():
         API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8002")
         docs = []
         try:
-            res = requests.get(f"{API_BASE_URL}/documents/course/{selected_course_code}")
+            res = requests.get(f"{API_BASE_URL}/documents/course/{selected_course_code}", headers=get_auth_headers())
             if res.status_code == 200:
                 docs = res.json().get("documents", [])
         except:
@@ -304,7 +304,7 @@ def render_staff_view():
                 with col2:
                     if st.button("Delete", key=f"del_{doc['_id']}"):
                         try:
-                            del_res = requests.delete(f"{API_BASE_URL}/documents/{doc['_id']}")
+                            del_res = requests.delete(f"{API_BASE_URL}/documents/{doc['_id']}", headers=get_auth_headers())
                             if del_res.status_code == 200:
                                 st.success(f"Deleted {doc['filename']}")
                                 st.rerun()
