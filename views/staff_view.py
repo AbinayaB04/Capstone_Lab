@@ -244,7 +244,7 @@ def render_staff_view():
         if st.button("Upload to Knowledge Base", type="primary"):
             if uploaded_files:
                     import requests
-                    API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+                    API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8002")
                     
                     files_to_upload = [('files', (f.name, f.getvalue(), 'application/octet-stream')) for f in uploaded_files]
 
@@ -285,7 +285,7 @@ def render_staff_view():
         st.divider()
         st.subheader("Manage Existing Documents")
         import requests
-        API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+        API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8002")
         docs = []
         try:
             res = requests.get(f"{API_BASE_URL}/documents/course/{selected_course_code}")

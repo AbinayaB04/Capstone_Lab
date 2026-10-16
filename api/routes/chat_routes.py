@@ -15,7 +15,7 @@ class QueryRequest(BaseModel):
     department_id: Optional[str] = None
     branch_id: Optional[str] = None
     course_code: Optional[str] = None
-    chat_history: List[Dict[str, str]] = []
+    chat_history: List[Dict[str, Any]] = []
     session_id: Optional[str] = None
     username: Optional[str] = None
 
@@ -72,16 +72,25 @@ async def generate_query_response(
         )
         if isinstance(res, dict):
             response = res["answer"]
-            sources = res["sources"]
+            sources = res.get("sources", [])
+            corrected_query = res.get("corrected_query")
+            source_type = res.get("source_type", "course_material")
         else:
             response = res
             sources = []
+            corrected_query = None
+            source_type = "course_material"
         
         if request.session_id and verified_username:
             add_message_to_session(request.session_id, "user", request.query)
             add_message_to_session(request.session_id, "assistant", response)
             
-        return {"response": response, "sources": sources}
+        return {
+            "response": response, 
+            "sources": sources,
+            "corrected_query": corrected_query,
+            "source_type": source_type
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

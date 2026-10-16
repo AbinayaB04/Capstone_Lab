@@ -60,7 +60,7 @@ def check_idle_timeout(timeout_minutes=30):
         st.session_state["last_activity"] = current_time
     return True
 
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8002")
 import requests
 
 def login_user(username, password=None, role=None, totp_code=None):

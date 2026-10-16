@@ -10,13 +10,7 @@ from database.mongo_manager import get_branches_by_department, get_courses_by_br
 from bson.objectid import ObjectId
 
 def load_lottieurl(url: str):
-    try:
-        r = requests.get(url)
-        if r.status_code != 200:
-            return None
-        return r.json()
-    except:
-        return None
+    return None
 
 def render_student_view():
     user = st.session_state.get("user", {})
@@ -151,8 +145,8 @@ def render_student_view():
                     with c_save:
                         if st.button("Save", key=f"save_{session_id_str}", use_container_width=True):
                             import requests
-                            API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
-                            requests.put(f"{API_BASE_URL}/chat/sessions/{session_id_str}", json={"title": new_title})
+                            API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8002")
+                            requests.put(f"{API_BASE_URL}/chat/sessions/{session_id_str}", json={"title": new_title}, headers=get_auth_headers())
                             st.session_state[f"edit_{session_id_str}"] = False
                             st.rerun()
                     with c_cancel:
@@ -174,8 +168,8 @@ def render_student_view():
                     with sc3:
                         if st.button("Del", key=f"del_btn_{session_id_str}", use_container_width=True, help="Delete Chat"):
                             import requests
-                            API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
-                            requests.delete(f"{API_BASE_URL}/chat/sessions/{session_id_str}")
+                            API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8002")
+                            requests.delete(f"{API_BASE_URL}/chat/sessions/{session_id_str}", headers=get_auth_headers())
                             if st.session_state.get("active_session_id") == session_id_str:
                                 st.session_state["active_session_id"] = None
                                 st.session_state["messages"] = []
@@ -188,9 +182,7 @@ def render_student_view():
             st.title("Student Portal")
             st.markdown("Welcome to the AI Exam Preparation Engine.")
         with col2:
-            lottie_ai = load_lottieurl("https://assets8.lottiefiles.com/packages/lf20_ujdjtzqt.json")
-            if lottie_ai:
-                st_lottie(lottie_ai, height=100, key="ai_anim")
+            st.markdown("<div style='font-size: 44px; text-align: right; line-height: 1;'>📘</div>", unsafe_allow_html=True)
         
         st.divider()
         
@@ -280,9 +272,13 @@ def render_student_view():
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
                 if message.get("sources"):
-                    with st.expander("📚 Verified Course Syllabus References", expanded=False):
+                    is_web = message.get("source_type") == "internet" or any(s.get("url") for s in message["sources"])
+                    exp_title = "🌐 Verified Internet / External Sources" if is_web else "📚 Verified Course Syllabus References"
+                    with st.expander(exp_title, expanded=False):
                         for s in message["sources"]:
                             st.markdown(f"**Source:** `{s.get('source', 'Lecture Note')}`")
+                            if s.get("url"):
+                                st.markdown(f"🔗 [Visit Reference URL]({s['url']})")
                             st.caption(f"{s.get('content', '')}")
                 
         # React to user input
@@ -316,17 +312,23 @@ def render_student_view():
                     log_document_access(st.session_state.get("user", {}).get("username", "unknown"), st.session_state.get("user", {}).get("role", "student"), selected_course_code, "ai_query")
                     # Pass history excluding the newly added prompt
                     import requests
-                    API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+                    API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8002")
+                    clean_history = [
+                        {"role": m.get("role", "user"), "content": m.get("content", "")}
+                        for m in st.session_state.messages[:-1]
+                        if isinstance(m, dict) and "content" in m
+                    ]
                     payload = {
                         "query": prompt,
                         "department_id": str(user["department_id"]),
                         "branch_id": str(selected_branch_id),
                         "course_code": str(selected_course_code),
-                        "chat_history": st.session_state.messages[:-1],
+                        "chat_history": clean_history,
                         "session_id": st.session_state.get("active_session_id"),
                         "username": user.get("username")
                     }
                     sources = []
+                    source_type = "course_material"
                     try:
                         res = requests.post(
                             f"{API_BASE_URL}/chat/query", 
@@ -337,6 +339,7 @@ def render_student_view():
                             data = res.json()
                             response = data.get("response", "Error generating response.")
                             sources = data.get("sources", [])
+                            source_type = data.get("source_type", "course_material")
                         else:
                             response = f"API Error: {res.text}"
                     except Exception as e:
@@ -344,13 +347,21 @@ def render_student_view():
                         
                     st.markdown(response)
                     if sources:
-                        with st.expander("📚 Verified Course Syllabus References", expanded=False):
+                        exp_title = "🌐 Verified Internet / External Sources" if source_type == "internet" or any(s.get("url") for s in sources) else "📚 Verified Course Syllabus References"
+                        with st.expander(exp_title, expanded=False):
                             for s in sources:
                                 st.markdown(f"**Source:** `{s.get('source', 'Lecture Note')}`")
+                                if s.get("url"):
+                                    st.markdown(f"🔗 [Visit Reference URL]({s['url']})")
                                 st.caption(f"{s.get('content', '')}")
             
             # Add assistant response to chat history
-            st.session_state.messages.append({"role": "assistant", "content": response, "sources": sources})
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": response, 
+                "sources": sources,
+                "source_type": source_type
+            })
                 
     elif nav_selection == "My Courses":
         st.title("My Courses")
@@ -504,7 +515,7 @@ def render_student_view():
         if st.button("Generate Quiz", type="primary"):
             with st.spinner("Analyzing course materials and generating questions..."):
                 import requests
-                API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+                API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8002")
                 try:
                     payload = {
                         "course_code": selected_course,
@@ -513,7 +524,12 @@ def render_student_view():
                         "num_questions": int(selected_num_questions),
                         "difficulty": selected_difficulty.lower()
                     }
-                    res = requests.post(f"{API_BASE_URL}/chat/generate-exam", json=payload, timeout=60)
+                    res = requests.post(
+                        f"{API_BASE_URL}/chat/generate-exam", 
+                        json=payload, 
+                        headers=get_auth_headers(), 
+                        timeout=45
+                    )
                     if res.status_code == 200:
                         quiz_data = res.json().get("exam")
                     else:
@@ -541,6 +557,19 @@ def render_student_view():
                 user_answers = {}
                 for i, q in enumerate(quiz):
                     st.markdown(f"**Q{i+1}: {q['question']}**")
+                    
+                    # Render reference image or diagram if provided
+                    img_val = q.get("image_url")
+                    if img_val:
+                        try:
+                            st.image(img_val, caption=f"Figure {i+1}: Reference Schematic", use_container_width=True)
+                        except Exception:
+                            st.markdown(f'<img src="{img_val}" style="max-width:100%; border-radius:8px; margin:8px 0; border:1px solid #e0e0e0;"/>', unsafe_allow_html=True)
+                            
+                    diagram_val = q.get("diagram")
+                    if diagram_val:
+                        st.code(diagram_val, language="text")
+                        
                     user_answers[i] = st.radio(f"Options for Q{i+1}", q.get('options', []), key=f"q_{i}", index=None, label_visibility="collapsed")
                     st.write("")
                     
@@ -587,6 +616,18 @@ def render_student_view():
                     
                 for i, q in enumerate(quiz):
                     st.markdown(f"**Q{i+1}: {q['question']}**")
+                    
+                    img_val = q.get("image_url")
+                    if img_val:
+                        try:
+                            st.image(img_val, caption=f"Figure {i+1}: Reference Schematic", use_container_width=True)
+                        except Exception:
+                            st.markdown(f'<img src="{img_val}" style="max-width:100%; border-radius:8px; margin:8px 0; border:1px solid #e0e0e0;"/>', unsafe_allow_html=True)
+                            
+                    diagram_val = q.get("diagram")
+                    if diagram_val:
+                        st.code(diagram_val, language="text")
+                        
                     user_ans = st.session_state["user_answers"].get(i)
                     correct_ans = q.get('answer')
                     

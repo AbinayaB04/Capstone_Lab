@@ -6,7 +6,7 @@ from redis.commands.search.field import VectorField, TagField, TextField
 from redis.commands.search.index_definition import IndexDefinition, IndexType
 from redis.commands.search.query import Query
 
-REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+REDIS_HOST = os.environ.get("REDIS_HOST", "127.0.0.1")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
 
 INDEX_NAME = "idx:semantic_cache"
@@ -21,14 +21,36 @@ def get_redis_client():
         socket_connect_timeout=1.0
     )
 
+import socket
+import time
+
+_redis_avail_cache = None
+
+def is_redis_available() -> bool:
+    global _redis_avail_cache
+    now = time.time()
+    if _redis_avail_cache is not None and (now - _redis_avail_cache[1]) < 30.0:
+        return _redis_avail_cache[0]
+    try:
+        with socket.create_connection((REDIS_HOST, REDIS_PORT), timeout=0.05):
+            _redis_avail_cache = (True, now)
+            return True
+    except Exception:
+        _redis_avail_cache = (False, now)
+        return False
+
+_index_initialized = False
+
 def init_redis_index():
+    global _index_initialized
+    if _index_initialized or not is_redis_available():
+        return
     client = get_redis_client()
     try:
         # Check if index exists
         client.ft(INDEX_NAME).info()
-        print(f"Redis index {INDEX_NAME} already exists.")
+        _index_initialized = True
     except Exception:
-        print(f"Creating Redis index {INDEX_NAME}...")
         # Define schema
         schema = (
             TagField("course_code"),
@@ -43,16 +65,16 @@ def init_redis_index():
                 }
             )
         )
-        
         definition = IndexDefinition(prefix=[PREFIX], index_type=IndexType.HASH)
-        
         try:
             client.ft(INDEX_NAME).create_index(fields=schema, definition=definition)
-            print(f"Successfully created {INDEX_NAME}")
-        except Exception as e:
-            print(f"Failed to create Redis index: {e}")
+        except Exception:
+            pass
+        _index_initialized = True
 
 def check_cache(query_vector: list, course_code: str, threshold: float = 0.90):
+    if not is_redis_available():
+        return None
     client = get_redis_client()
     
     # Convert list of floats to byte array for Redis
@@ -83,6 +105,8 @@ def check_cache(query_vector: list, course_code: str, threshold: float = 0.90):
     return None
 
 def set_cache(query_vector: list, query_text: str, course_code: str, answer: str):
+    if not is_redis_available():
+        return
     client = get_redis_client()
     
     query_vector_bytes = np.array(query_vector, dtype=np.float32).tobytes()
@@ -105,6 +129,8 @@ def set_cache(query_vector: list, query_text: str, course_code: str, answer: str
         print(f"Redis save error: {e}")
 
 def blacklist_token(token: str, expires_in: int):
+    if not is_redis_available():
+        return
     client = get_redis_client()
     try:
         client.set(f"blacklist:{token}", "true", ex=expires_in)
@@ -112,6 +138,8 @@ def blacklist_token(token: str, expires_in: int):
         print(f"Redis blacklist error: {e}")
 
 def is_token_blacklisted(token: str) -> bool:
+    if not is_redis_available():
+        return False
     client = get_redis_client()
     try:
         return client.exists(f"blacklist:{token}") > 0
@@ -124,6 +152,8 @@ def set_active_session(username: str, token: str, expires_in: int = 14400):
     Enforces single-device / concurrent session control.
     When a user logs in from a new location, their previous token is revoked immediately.
     """
+    if not is_redis_available():
+        return
     client = get_redis_client()
     try:
         active_key = f"active_session:{username.lower()}"
@@ -142,6 +172,8 @@ def revoke_user_sessions(username: str, expires_in: int = 14400) -> bool:
     Real-time session killswitch (The Leaver Phase).
     Immediately invalidates active JWTs in Redis when an account is suspended or terminated.
     """
+    if not is_redis_available():
+        return False
     client = get_redis_client()
     try:
         active_key = f"active_session:{username.lower()}"
