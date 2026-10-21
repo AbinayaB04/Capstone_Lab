@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Request, Header
+from fastapi import APIRouter, HTTPException, Request, Header
 from pydantic import BaseModel
 from database.mongo_manager import verify_login, update_password, log_audit_action
 from database.redis_manager import blacklist_token, is_token_blacklisted, set_active_session
@@ -168,7 +168,7 @@ async def verify_dob(req: ForgotPasswordVerifyRequest):
 
 @router.post("/forgot-password/reset")
 async def reset_forgotten_password(req: ForgotPasswordResetRequest):
-    from database.mongo_manager import verify_dob_for_reset, update_password
+    from database.mongo_manager import verify_dob_for_reset
     if not verify_dob_for_reset(req.username, req.dob):
         raise HTTPException(status_code=400, detail="Invalid Username or Date of Birth.")
         

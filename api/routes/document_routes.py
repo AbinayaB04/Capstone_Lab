@@ -4,8 +4,7 @@ from database.mongo_manager import fs, add_document_record, get_documents_by_cou
 from services.audit_service import log_document_access
 from utils.pdf_utils import extract_and_chunk_pdf
 from database.vector_manager import insert_document_chunk
-from api.dependencies import get_current_user, require_permission, require_role, enforce_tenant_isolation
-import uuid
+from api.dependencies import require_permission, require_role, enforce_tenant_isolation
 import os
 
 router = APIRouter(prefix="/documents", tags=["documents"])

@@ -545,7 +545,7 @@ def render_admin_view():
                     st.rerun()
             else:
                 secret = st.session_state["temp_2fa_secret"]
-                st.markdown(f"**Step 1:** Enter this key into your Authenticator app:")
+                st.markdown("**Step 1:** Enter this key into your Authenticator app:")
                 st.code(secret, language="text")
                 st.caption(f"Account: {user.get('username')} | Issuer: StudyMate")
                 

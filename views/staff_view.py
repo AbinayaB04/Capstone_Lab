@@ -57,11 +57,8 @@ def _process_upload_in_background(task_id, file_bytes, filename, user_dept_id, s
         print(f"Background upload error: {e}")
         st.session_state.ingestion_tasks[task_id] = f"Failed: {str(e)}"
 from services.llm_service import AIEngine
-from database.mongo_manager import fs, get_branches_by_department, get_courses_by_branch_and_sem, add_document_record
-from database.vector_manager import insert_document_chunk
-from utils.pdf_utils import extract_and_chunk_pdf
+from database.mongo_manager import get_branches_by_department, get_courses_by_branch_and_sem
 from bson.objectid import ObjectId
-import uuid
 
 def render_staff_view():
     if "ingestion_tasks" not in st.session_state:
@@ -408,7 +405,7 @@ def render_staff_view():
                     st.rerun()
             else:
                 secret = st.session_state["temp_2fa_secret"]
-                st.markdown(f"**Step 1:** Enter this key into your Authenticator app:")
+                st.markdown("**Step 1:** Enter this key into your Authenticator app:")
                 st.code(secret, language="text")
                 st.caption(f"Account: {user.get('username')} | Issuer: StudyMate")
                 

@@ -12,7 +12,7 @@ st.set_page_config(
 os.environ["MONGO_NO_PYOPENSSL"] = "1"
 
 from utils.style import inject_custom_css
-from auth.session_manager import init_session_state
+from auth.session_manager import init_session_state, check_idle_timeout
 from views.login_view import render_login_view
 from views.student_view import render_student_view
 from views.staff_view import render_staff_view
@@ -21,8 +21,6 @@ from views.admin_view import render_admin_view
 def main():
     # Inject CSS styles
     inject_custom_css()
-    
-    from auth.session_manager import init_session_state, check_idle_timeout
     
     # Initialize session state variables
     init_session_state()

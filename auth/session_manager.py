@@ -3,7 +3,6 @@ import jwt
 import os
 import datetime
 from dotenv import load_dotenv
-from database.mongo_manager import verify_login
 
 load_dotenv(override=True)
 JWT_SECRET = os.environ.get("JWT_SECRET", "super-secret-capstone-key-2026")

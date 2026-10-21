@@ -1,12 +1,19 @@
 import streamlit as st
 import os
 import requests
-from streamlit_lottie import st_lottie
 from streamlit_option_menu import option_menu
 from auth.session_manager import logout_user, get_auth_headers
-from utils.image_utils import get_base64_of_bin_file
 from services.llm_service import AIEngine
-from database.mongo_manager import get_branches_by_department, get_courses_by_branch_and_sem, get_documents_by_course, get_file_from_gridfs, branches_col, users_col
+from utils.image_utils import get_base64_of_bin_file
+from database.mongo_manager import (
+    get_branches_by_department, 
+    get_courses_by_branch_and_sem, 
+    get_documents_by_course, 
+    get_file_from_gridfs, 
+    get_course_by_code,
+    branches_col, 
+    users_col
+)
 from bson.objectid import ObjectId
 
 def load_lottieurl(url: str):
@@ -926,7 +933,7 @@ def render_student_view():
                     st.rerun()
             else:
                 secret = st.session_state["temp_2fa_secret"]
-                st.markdown(f"**Step 1:** Enter this key into your Authenticator app:")
+                st.markdown("**Step 1:** Enter this key into your Authenticator app:")
                 st.code(secret, language="text")
                 st.caption(f"Account: {user.get('username')} | Issuer: StudyMate")
                 
