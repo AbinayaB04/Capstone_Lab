@@ -1,13 +1,17 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
 from typing import List, Optional
-from database.mongo_manager import fs, add_document_record, get_documents_by_course, delete_document as db_delete_document
+from database.mongo_manager import fs, add_document_record, get_documents_by_course, delete_document as db_delete_document, get_course_by_code
 from services.audit_service import log_document_access
 from utils.pdf_utils import extract_and_chunk_pdf
 from database.vector_manager import insert_document_chunk
 from api.dependencies import get_current_user, require_permission, require_role, enforce_tenant_isolation
 import uuid
+import os
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB limit
+ALLOWED_EXTENSIONS = {".pdf", ".pptx"}
 
 def process_upload_in_background(file_bytes: bytes, filename: str, user_dept_id: str, selected_branch_id: str, selected_semester: int, selected_course_code: str, uploader_username: str, role: str):
     try:
@@ -67,13 +71,58 @@ async def upload_documents(
     # Enforce multi-tenant isolation: verify user cannot upload for another department
     enforce_tenant_isolation(current_user, requested_dept_id=user_dept_id, requested_branch_id=selected_branch_id)
     
+    # Course semester consistency validation
+    course = get_course_by_code(selected_course_code)
+    if course and course.get("semester_number") and int(course["semester_number"]) != int(selected_semester):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Course '{selected_course_code}' belongs to Semester {course['semester_number']}, not Semester {selected_semester}."
+        )
+
     queued_files = []
     for uploaded_file in files:
+        # 1. Sanitize filename against directory traversal attacks
+        raw_name = uploaded_file.filename or "uploaded_document"
+        clean_name = os.path.basename(raw_name)
+        ext = os.path.splitext(clean_name)[1].lower()
+        
+        # 2. Whitelist file extensions
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Security rejection: Invalid file format '{ext}' in '{clean_name}'. Only .pdf and .pptx are permitted."
+            )
+            
         file_bytes = await uploaded_file.read()
+        
+        # 3. File size enforcement (DoS prevention)
+        if len(file_bytes) > MAX_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Security rejection: File '{clean_name}' exceeds maximum allowed size of 50 MB."
+            )
+        if len(file_bytes) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Security rejection: File '{clean_name}' is empty (0 bytes)."
+            )
+            
+        # 4. Magic bytes verification (Anti-spoofing)
+        if ext == ".pdf" and not file_bytes.startswith(b"%PDF"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Security rejection: Header signature verification failed for '{clean_name}'. File is not a valid PDF."
+            )
+        elif ext == ".pptx" and not file_bytes.startswith(b"PK\x03\x04"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Security rejection: Header signature verification failed for '{clean_name}'. File is not a valid PPTX document."
+            )
+
         background_tasks.add_task(
             process_upload_in_background,
             file_bytes,
-            uploaded_file.filename,
+            clean_name,
             user_dept_id,
             selected_branch_id,
             selected_semester,
@@ -81,7 +130,7 @@ async def upload_documents(
             verified_username,
             verified_role
         )
-        queued_files.append(uploaded_file.filename)
+        queued_files.append(clean_name)
         
     return {"message": "Documents queued for background processing.", "files": queued_files}
 

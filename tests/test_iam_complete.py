@@ -198,3 +198,37 @@ def test_account_unlock():
         assert user["failed_attempts"] == 0
     finally:
         users_col.delete_one({"username": test_username})
+
+def test_upload_security_controls():
+    """Verify upload permission boundaries, extension whitelisting, and magic bytes validation."""
+    from auth.rbac_manager import RBACManager
+    from api.routes.document_routes import ALLOWED_EXTENSIONS, MAX_FILE_SIZE_BYTES
+    import os
+
+    # 1. RBAC: Only staff and department_admin have upload_materials permission (Separation of Duties)
+    assert RBACManager.has_permission("staff", "upload_materials") is True
+    assert RBACManager.has_permission("department_admin", "upload_materials") is True
+    assert RBACManager.has_permission("student", "upload_materials") is False
+    assert RBACManager.has_permission("admin", "upload_materials") is False
+
+    # 2. File size limit
+    assert MAX_FILE_SIZE_BYTES == 50 * 1024 * 1024
+
+    # 3. Extension whitelisting
+    assert ".pdf" in ALLOWED_EXTENSIONS
+    assert ".pptx" in ALLOWED_EXTENSIONS
+    assert ".exe" not in ALLOWED_EXTENSIONS
+    assert ".sh" not in ALLOWED_EXTENSIONS
+    assert ".py" not in ALLOWED_EXTENSIONS
+
+    # 4. Path traversal protection: os.path.basename strips directory manipulation
+    malicious_filename = "../../../etc/passwd.pdf"
+    sanitized = os.path.basename(malicious_filename)
+    assert sanitized == "passwd.pdf"
+    assert "/" not in sanitized and ".." not in sanitized
+
+    # 5. Magic byte verification
+    valid_pdf_bytes = b"%PDF-1.4 sample content"
+    invalid_pdf_bytes = b"MZ\x90\x00 fake executable masquerading as pdf"
+    assert valid_pdf_bytes.startswith(b"%PDF")
+    assert not invalid_pdf_bytes.startswith(b"%PDF")

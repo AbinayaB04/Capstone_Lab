@@ -315,7 +315,7 @@ def render_student_view():
                     key="student_branch_select"
                 )
             
-        # 2. Semester Dropdown
+        # 2. Semester (Locked strictly to enrolled semester)
         with col2:
             if is_student:
                 enrolled_sem = int(user_semester) if user_semester else 1
@@ -573,11 +573,15 @@ def render_student_view():
             st.stop()
         
         if selected_course_code:
-            docs = get_documents_by_course(selected_course_code)
-            if not docs:
-                st.info("No documents have been uploaded for this course yet.")
+            course_obj = get_course_by_code(selected_course_code)
+            if course_obj and course_obj.get("semester_number") and int(course_obj["semester_number"]) != selected_semester:
+                st.error("⛔ Access Forbidden: You cannot access documents outside your enrolled semester.")
             else:
-                for doc in docs:
+                docs = get_documents_by_course(selected_course_code)
+                if not docs:
+                    st.info("No documents have been uploaded for this course yet.")
+                else:
+                    for doc in docs:
                     with st.container():
                         col_doc1, col_doc2 = st.columns([4, 1])
                         with col_doc1:
@@ -683,6 +687,11 @@ def render_student_view():
             options=list(course_options.keys()),
             format_func=lambda x: f"{x}: {course_options[x]}"
         )
+
+        course_obj = get_course_by_code(selected_course)
+        if course_obj and course_obj.get("semester_number") and int(course_obj["semester_number"]) != selected_semester:
+            st.error("⛔ Access Forbidden: You cannot generate quizzes for courses outside your enrolled semester.")
+            st.stop()
 
         
         c_opt1, c_opt2 = st.columns(2)

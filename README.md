@@ -2,31 +2,43 @@
 
 StudyMate is an advanced, AI-driven educational platform designed for students and staff. It features a microservice architecture with a FastAPI backend, a Streamlit frontend, and robust integrations with MongoDB, Redis, and ChromaDB for Retrieval-Augmented Generation (RAG) capabilities.
 
-## 🚀 Features
-- **Role-Based Access Control (RBAC)**: Secure separation between Admins, Staff, and Students.
-- **Enterprise IAM & Security**:
-  - Two-Factor Authentication (2FA / TOTP) compatible with Google Authenticator and Microsoft Authenticator.
-  - Strict password complexity, password reuse prevention, and 90-day expiration policy.
-  - Auto-account lockout after 5 failed attempts and Admin override controls (Unlock Account / Force Password Reset).
-  - Date of Birth (DOB) verification for password self-recovery.
-- **AI Query Engine & Transparent RAG**:
-  - Chat with course materials powered by Google Gemini and Groq (Llama-3) fallback.
-  - Transparent citations: Expandable "Verified Course Syllabus References" showing exact lecture excerpts and page chunks.
-  - Semantic caching via Redis vector search to save API tokens.
-- **AI Practice Exams & Student Analytics**:
-  - Custom exam generation by Difficulty (*Easy*, *Medium*, *Hard*) and Question Count (*3*, *5*, *10*).
-  - Instant grading with detailed **Explanations & Concept Rationales** for each question.
-  - Persistent exam history in MongoDB with score progression line charts.
-- **Course & Curriculum Management (Admin Portal)**:
-  - Full UI controls to create Departments, Branches, and Semester Courses without direct database manipulation.
-- **Document Management & Vector Synchronization**:
-  - Support for `.pdf` and `.pptx` documents.
-  - Automatic document deletion purging raw files from GridFS and corresponding vector chunks from ChromaDB.
+## Features
+- **Role-Based Access Control (RBAC) & Separation of Duties**: 
+  - Fine-grained permission matrix across Super Admins, Department Admins, Staff, and Students.
+- **Enterprise IAM Lifecycle Governance (JMLM Model)**:
+  - **Joiner Phase**: Secure user onboarding with branch assignment, initial semester, and enrollment date tracking.
+  - **Mover Phase (Automated Time-Based Progression)**: Just-In-Time (JIT) 6-month term progression calculated on login; admin override controls and Academic Hold flags to freeze auto-promotion for medical leave or term repeats.
+  - **Maintainer Phase**: 90-day password rotation, password history tracking (last 3 hashes), 2FA/TOTP authenticator app support with single-use recovery codes, and brute-force lockout after 5 failed attempts.
+  - **Leaver Phase (Soft-Deprovisioning & Session Killswitch)**: Instant Redis-backed JWT session revocation upon account suspension; automated transition to Alumni status upon graduation (> Semester 8).
+- **Academic Semester Isolation & Zero-Trust Boundary**:
+  - Students are strictly restricted to querying, accessing, and downloading course documents in their actively enrolled semester.
+  - Cross-semester queries, exam generation, and material downloads are blocked at both backend API (`HTTP 403 Forbidden`) and frontend UI levels.
+- **Hardened Document Ingestion & Upload Security**:
+  - Cryptographic identity extraction from JWT claims (anti-spoofing).
+  - Multi-tenant department isolation enforcing that staff only upload within their assigned department.
+  - Directory traversal defense (`os.path.basename` path sanitization).
+  - Strict extension whitelisting (`.pdf` and `.pptx` only).
+  - Magic byte binary signature verification (`%PDF-` and `PK\x03\x04`) preventing extension masquerading.
+  - 50 MB file size limit and memory exhaustion protection.
+  - Immutable audit logging in MongoDB for compliance tracking.
+- **Dual-Mesh AI Engine & Transparent RAG**:
+  - Conversational tutoring powered by Google Gemini with automated fallback to Groq (Llama-3 / Qwen) for resilience.
+  - Typo correction and query normalization (`correct_spelling`).
+  - Corrective RAG (CRAG) with multi-source internet search fallback (DuckDuckGo + Wikipedia).
+  - Transparent syllabus citations with expandable source excerpts.
+  - Vector semantic caching via Redis vector search (`RediSearch` cosine indexing).
+- **AI Practice Exams & Analytics**:
+  - Dynamic multiple-choice exam generation with difficulty levels and technical dependency/schema diagrams.
+  - Instant grading with comprehensive concept explanations.
+  - Persistent exam history with performance tracking line charts.
+- **Curriculum & Document Management**:
+  - Administrative CRUD controls for Departments, Branches, and Courses.
+  - GridFS document storage and ChromaDB vector chunk synchronization.
 - **Automated Test Suite**:
-  - Built-in `pytest` coverage for RBAC, authentication, JWT tokens, TOTP verification, curriculum CRUD, and exam scoring.
+  - Comprehensive `pytest` test suites validating all IAM lifecycle phases, semester isolation, upload defenses, RBAC permissions, and quiz engine flows.
 
 
-## 🛠️ Tech Stack
+## Tech Stack
 - **Frontend**: Streamlit
 - **Backend**: FastAPI (Python)
 - **Database**: MongoDB Atlas (Cloud)
@@ -36,7 +48,7 @@ StudyMate is an advanced, AI-driven educational platform designed for students a
 
 ---
 
-## ⚙️ How to Setup the Environment
+## How to Setup the Environment
 
 ### 1. Prerequisites
 Ensure you have the following installed on your machine:
@@ -59,7 +71,7 @@ The repository contains an example environment file. You must create your own `.
 
 ---
 
-## ▶️ How to Run the Application
+## How to Run the Application
 
 Because the application is fully Dockerized, starting the entire stack (Frontend, Backend, and Redis) is simple.
 
@@ -77,7 +89,7 @@ Because the application is fully Dockerized, starting the entire stack (Frontend
 
 ---
 
-## 🔄 How to Update the Application
+## How to Update the Application
 
 If changes are made to the dependencies (e.g., modifying `requirements.txt`) or `Dockerfile`s, you must rebuild the containers:
 
@@ -98,7 +110,7 @@ For standard Python code updates (`app.py`, `views/`, `api/`, etc.), **no rebuil
 
 ---
 
-## 🧪 Running Automated Tests
+## Running Automated Tests
 
 To verify the test suite:
 ```bash
