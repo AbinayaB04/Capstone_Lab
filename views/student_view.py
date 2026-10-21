@@ -582,24 +582,24 @@ def render_student_view():
                     st.info("No documents have been uploaded for this course yet.")
                 else:
                     for doc in docs:
-                    with st.container():
-                        col_doc1, col_doc2 = st.columns([4, 1])
-                        with col_doc1:
-                            st.markdown(f"📄 **{doc['filename']}**")
-                            upload_date = doc.get('upload_date')
-                            date_str = upload_date.strftime("%Y-%m-%d %H:%M") if upload_date else "Unknown"
-                            st.caption(f"Uploaded by: {doc.get('uploader_username', 'Staff')} | Date: {date_str}")
-                        with col_doc2:
-                            file_data = get_file_from_gridfs(doc['gridfs_id'])
-                            if file_data:
-                                st.download_button(
-                                    label="Download",
-                                    data=file_data,
-                                    file_name=doc['filename'],
-                                    mime="application/octet-stream",
-                                    key=f"dl_{doc['_id']}"
-                                )
-                        st.markdown("---")
+                        with st.container():
+                            col_doc1, col_doc2 = st.columns([4, 1])
+                            with col_doc1:
+                                st.markdown(f"📄 **{doc['filename']}**")
+                                upload_date = doc.get('upload_date')
+                                date_str = upload_date.strftime("%Y-%m-%d %H:%M") if upload_date else "Unknown"
+                                st.caption(f"Uploaded by: {doc.get('uploader_username', 'Staff')} | Date: {date_str}")
+                            with col_doc2:
+                                file_data = get_file_from_gridfs(doc['gridfs_id'])
+                                if file_data:
+                                    st.download_button(
+                                        label="Download",
+                                        data=file_data,
+                                        file_name=doc['filename'],
+                                        mime="application/octet-stream",
+                                        key=f"dl_{doc['_id']}"
+                                    )
+                            st.markdown("---")
         
     elif nav_selection == "Practice Exams":
         st.title("AI Practice Exams")
