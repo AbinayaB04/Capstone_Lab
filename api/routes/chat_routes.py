@@ -15,6 +15,7 @@ class QueryRequest(BaseModel):
     department_id: Optional[str] = None
     branch_id: Optional[str] = None
     course_code: Optional[str] = None
+    semester: Optional[int] = None
     chat_history: List[Dict[str, Any]] = []
     session_id: Optional[str] = None
     username: Optional[str] = None
@@ -23,6 +24,7 @@ class ExamRequest(BaseModel):
     course_code: str
     department_id: str
     branch_id: str
+    semester: Optional[int] = None
     num_questions: int = 5
     difficulty: str = "medium"
 
@@ -52,11 +54,13 @@ async def generate_query_response(
     request: QueryRequest,
     current_user: dict = Depends(require_permission("ask_ai"))
 ):
-    # Enforce multi-tenant boundary: verify student cannot query another dept/branch materials
+    # Enforce multi-tenant and cross-semester boundary: verify student cannot query another dept/branch/semester course
     enforce_tenant_isolation(
         current_user, 
         requested_dept_id=request.department_id, 
-        requested_branch_id=request.branch_id
+        requested_branch_id=request.branch_id,
+        requested_course_code=request.course_code,
+        requested_semester=request.semester
     )
     
     verified_username = current_user.get("username")
@@ -142,7 +146,9 @@ async def generate_exam(
     enforce_tenant_isolation(
         current_user, 
         requested_dept_id=request.department_id, 
-        requested_branch_id=request.branch_id
+        requested_branch_id=request.branch_id,
+        requested_course_code=request.course_code,
+        requested_semester=request.semester
     )
     try:
         exam_json = ai_engine.generate_exam(
@@ -161,6 +167,12 @@ async def create_session(
     request: SessionCreateRequest,
     current_user: dict = Depends(get_current_user)
 ):
+    enforce_tenant_isolation(
+        current_user,
+        requested_branch_id=request.branch_id,
+        requested_course_code=request.course_code,
+        requested_semester=request.semester
+    )
     verified_username = current_user.get("username")
     session_id = create_chat_session(
         verified_username, 

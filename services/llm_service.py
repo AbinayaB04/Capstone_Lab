@@ -321,12 +321,14 @@ User Question: {corrected_query}
                 break
             formatted_context += chunk + "\n\n"
             
-        prompt = f"""You are an expert university professor designing an advanced examination.
+        prompt = f"""You are an expert university professor designing an advanced examination for the course {course_code}.
 Based on the course context provided, generate {num_questions} challenging, complex multiple-choice questions at a {difficulty} difficulty level.
 
 Guidelines for question complexity:
 1. Higher-Order Cognitive Evaluation: Formulate scenario-based problems, output prediction, edge-case analysis, schema evaluation, or architectural trade-offs. Avoid simplistic, 1-line trivial recall.
-2. Visual Diagrams & Schematics: For questions that benefit from visual schemas (e.g., table schemas with keys, tree/graph structures, dependency graphs, state machines, or architecture workflows), include:
+2. Visual Questions & Schematics (REQUIRED for questions involving schemas, architectures, trees, or data models):
+   For questions that involve structural, architectural, algorithmic, or schema reasoning (e.g., ER diagrams, relational schemas, B-trees, binary search trees, state machines, pipeline stages, network topology), provide:
+   - "image_svg": A clean, self-contained SVG vector graphic illustrating the question's diagram or schema (e.g. `<svg viewBox='0 0 520 160' xmlns='http://www.w3.org/2000/svg'><rect .../><text ...>...</text></svg>`). Use clean modern styling (rounded rects, crisp font, colored node fills like #e0f2fe, #f0fdf4, #fef3c7, and arrows). Set to null if the question is purely conceptual.
    - "diagram": A compact 3-5 line clean ASCII / box / tree schematic (e.g. using +, -, |, arrows) illustrating the scenario, or null if not needed.
    - "image_url": A valid web URL to a relevant educational diagram if applicable, or null.
 3. Plausible Options: Provide 4 rigorous, thoughtful options (Option A, Option B, Option C, Option D) with plausible distractors targeting common misconceptions.
@@ -335,8 +337,9 @@ Guidelines for question complexity:
 Return strictly raw JSON format as an array of objects:
 [
   {{
-    "question": "Scenario or problem statement...",
-    "diagram": "compact 3-5 line ASCII diagram or null",
+    "question": "Scenario or problem statement referencing the diagram below...",
+    "image_svg": "<svg viewBox='0 0 520 160' xmlns='http://www.w3.org/2000/svg'>...</svg> or null",
+    "diagram": "compact 3-5 line ASCII schema or null",
     "image_url": null,
     "options": ["Option A", "Option B", "Option C", "Option D"],
     "answer": "Option B",
@@ -439,4 +442,6 @@ Context:
                 q["diagram"] = None
             if "image_url" not in q:
                 q["image_url"] = None
+            if "image_svg" not in q:
+                q["image_svg"] = None
         return quiz

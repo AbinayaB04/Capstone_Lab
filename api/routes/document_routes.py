@@ -90,6 +90,7 @@ async def get_documents(
     course_code: str,
     current_user: dict = Depends(require_permission("view_materials"))
 ):
+    enforce_tenant_isolation(current_user, requested_course_code=course_code)
     docs = get_documents_by_course(course_code)
     for doc in docs:
         doc["_id"] = str(doc["_id"])

@@ -6,11 +6,98 @@ from streamlit_option_menu import option_menu
 from auth.session_manager import logout_user, get_auth_headers
 from utils.image_utils import get_base64_of_bin_file
 from services.llm_service import AIEngine
-from database.mongo_manager import get_branches_by_department, get_courses_by_branch_and_sem, get_documents_by_course, get_file_from_gridfs
+from database.mongo_manager import get_branches_by_department, get_courses_by_branch_and_sem, get_documents_by_course, get_file_from_gridfs, branches_col, users_col
 from bson.objectid import ObjectId
 
 def load_lottieurl(url: str):
     return None
+
+def generate_svg_diagram_card(diagram_text: str, title: str = "Reference Architecture & Schema") -> str:
+    """
+    Renders ASCII, schema tables, or text diagrams into a high-contrast SVG image card.
+    """
+    import html
+    lines = diagram_text.strip().split("\n")
+    max_len = max((len(line) for line in lines), default=40)
+    card_width = max(520, min(800, max_len * 9 + 60))
+    card_height = max(180, len(lines) * 21 + 75)
+    
+    escaped_lines = [html.escape(line) for line in lines]
+    text_spans = "".join([
+        f'<tspan x="24" dy="20">{line}</tspan>' if idx > 0 else f'<tspan x="24" y="65">{line}</tspan>'
+        for idx, line in enumerate(escaped_lines)
+    ])
+    
+    grad_id = f"cardGrad_{abs(hash(diagram_text)) % 100000}"
+    svg = f"""<svg width="{card_width}" height="{card_height}" viewBox="0 0 {card_width} {card_height}" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="{grad_id}" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#090d16" />
+          <stop offset="100%" stop-color="#111827" />
+        </linearGradient>
+      </defs>
+      <!-- Background Card -->
+      <rect width="{card_width}" height="{card_height}" rx="10" fill="url(#{grad_id})" stroke="#2563eb" stroke-width="1.5"/>
+      <!-- Window Title Bar -->
+      <rect width="{card_width}" height="32" rx="10" fill="#1e293b"/>
+      <rect y="22" width="{card_width}" height="10" fill="#1e293b"/>
+      <!-- Mac-style status dots -->
+      <circle cx="18" cy="16" r="4.5" fill="#ef4444"/>
+      <circle cx="34" cy="16" r="4.5" fill="#f59e0b"/>
+      <circle cx="50" cy="16" r="4.5" fill="#10b981"/>
+      <text x="{card_width // 2}" y="20" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="11" font-weight="600" text-anchor="middle" letter-spacing="0.5">{html.escape(title)}</text>
+      <!-- Diagram Content -->
+      <text font-family="Courier New, Consolas, Monaco, monospace" font-size="13" font-weight="500" fill="#38bdf8">
+        {text_spans}
+      </text>
+    </svg>"""
+    return svg
+
+def render_question_media(q: dict, index: int):
+    """
+    Renders question visual figures/images using SVG vector graphics,
+    valid image URLs, or styled dynamic SVG diagram cards.
+    """
+    # 1. Direct SVG Vector Graphic
+    svg_val = q.get("image_svg")
+    if svg_val and isinstance(svg_val, str) and "<svg" in svg_val:
+        clean_svg = svg_val[svg_val.find("<svg"):svg_val.rfind("</svg>") + 6]
+        st.markdown(
+            f"""
+            <div style="background:#0b1120; padding:16px; border-radius:10px; border:1.5px solid #2563eb; margin:10px 0; text-align:center; box-shadow:0 4px 12px rgba(0,0,0,0.25);">
+                <div style="color:#60a5fa; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px;">
+                    📐 Figure {index+1}: Reference Architecture / Schema Diagram
+                </div>
+                <div style="max-width:100%; overflow-x:auto; display:flex; justify-content:center;">
+                    {clean_svg}
+                </div>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+        return
+
+    # 2. Web Image URL
+    img_val = q.get("image_url")
+    if img_val and isinstance(img_val, str) and img_val.startswith(("http://", "https://", "data:image")):
+        try:
+            st.image(img_val, caption=f"Figure {index+1}: Reference Schematic", use_container_width=True)
+            return
+        except Exception:
+            pass
+
+    # 3. Dynamic SVG Diagram Card from ASCII/Text Diagram
+    diagram_val = q.get("diagram")
+    if diagram_val and str(diagram_val).strip() and str(diagram_val).lower() != "null":
+        svg_card = generate_svg_diagram_card(str(diagram_val).strip(), title=f"Figure {index+1}: Schematic Diagram")
+        st.markdown(
+            f"""
+            <div style="margin:10px 0; display:flex; justify-content:center; max-width:100%; overflow-x:auto;">
+                {svg_card}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
 def render_student_view():
     user = st.session_state.get("user", {})
@@ -194,6 +281,8 @@ def render_student_view():
         st.subheader("Course Selection")
         col1, col2, col3 = st.columns(3)
         
+        is_student = str(user.get("role", "")).lower() == "student"
+
         # 1. Branch Dropdown
         with col1:
             branches = []
@@ -204,29 +293,49 @@ def render_student_view():
                     pass
             branch_options = {str(b["_id"]): b["branch_name"] for b in branches}
             
-            default_branch_index = 0
-            if user_branch_id and str(user_branch_id) in branch_options:
-                default_branch_index = list(branch_options.keys()).index(str(user_branch_id))
-            
-            selected_branch_id = st.selectbox(
-                "Select Branch", 
-                options=list(branch_options.keys()), 
-                format_func=lambda x: branch_options[x],
-                index=default_branch_index if branch_options else 0,
-                key="student_branch_select"
-            )
+            if is_student and user_branch_id and str(user_branch_id) in branch_options:
+                selected_branch_id = st.selectbox(
+                    "Branch (🔒 Enrolled)", 
+                    options=[str(user_branch_id)], 
+                    format_func=lambda x: branch_options.get(x, "Enrolled Branch"),
+                    index=0,
+                    disabled=True,
+                    help="Students are isolated to their registered branch curriculum.",
+                    key="student_branch_select"
+                )
+            else:
+                default_branch_index = 0
+                if user_branch_id and str(user_branch_id) in branch_options:
+                    default_branch_index = list(branch_options.keys()).index(str(user_branch_id))
+                selected_branch_id = st.selectbox(
+                    "Select Branch", 
+                    options=list(branch_options.keys()), 
+                    format_func=lambda x: branch_options[x],
+                    index=default_branch_index if branch_options else 0,
+                    key="student_branch_select"
+                )
             
         # 2. Semester Dropdown
         with col2:
-            semesters = [1, 2, 3, 4, 5, 6, 7, 8]
-            default_sem_index = semesters.index(user_semester) if user_semester in semesters else 0
-            
-            selected_semester = st.selectbox(
-                "Select Semester",
-                options=semesters,
-                index=default_sem_index,
-                key="student_sem_select"
-            )
+            if is_student:
+                enrolled_sem = int(user_semester) if user_semester else 1
+                selected_semester = st.selectbox(
+                    "Semester (🔒 Enrolled)",
+                    options=[enrolled_sem],
+                    index=0,
+                    disabled=True,
+                    help="Students are strictly isolated to their enrolled academic semester.",
+                    key="student_sem_select"
+                )
+            else:
+                semesters = list(range(1, 11))
+                default_sem_index = semesters.index(user_semester) if user_semester in semesters else 0
+                selected_semester = st.selectbox(
+                    "Select Semester",
+                    options=semesters,
+                    index=default_sem_index,
+                    key="student_sem_select"
+                )
             
         # 3. Course Dropdown
         with col3:
@@ -248,11 +357,18 @@ def render_student_view():
             
         st.divider()
         
-        # Execution Gate
+        # Execution Gate & Tenant Boundary Enforcement
         if not (selected_branch_id and selected_semester and selected_course_code):
-            st.warning("Please select a Branch, Semester, and Course to access the AI Engine.")
+            if not course_options:
+                st.info(f"ℹ️ **No courses registered for {branch_options.get(str(selected_branch_id), 'this branch')} in Semester {selected_semester}.** If you wish to switch your academic semester for testing, you can update it in **Settings**.")
+            else:
+                st.warning("Please select a Course to access the AI Engine.")
             return # Halt rendering
             
+        if is_student and user_semester and int(selected_semester) != int(user_semester):
+            st.error(f"🛑 **Cross-Semester Access Blocked:** You are registered for Semester {user_semester}. Accessing or querying courses from Semester {selected_semester} is strictly forbidden.")
+            return
+
         # Store active context
         st.session_state["active_course_context"] = selected_course_code
         
@@ -323,6 +439,7 @@ def render_student_view():
                         "department_id": str(user["department_id"]),
                         "branch_id": str(selected_branch_id),
                         "course_code": str(selected_course_code),
+                        "semester": int(selected_semester),
                         "chat_history": clean_history,
                         "session_id": st.session_state.get("active_session_id"),
                         "username": user.get("username")
@@ -332,7 +449,7 @@ def render_student_view():
                     try:
                         res = requests.post(
                             f"{API_BASE_URL}/chat/query", 
-                            json=payload,
+                            json=payload, 
                             headers=get_auth_headers()
                         )
                         if res.status_code == 200:
@@ -340,6 +457,12 @@ def render_student_view():
                             response = data.get("response", "Error generating response.")
                             sources = data.get("sources", [])
                             source_type = data.get("source_type", "course_material")
+                        elif res.status_code == 403:
+                            try:
+                                err_msg = res.json().get("detail", res.text)
+                            except Exception:
+                                err_msg = res.text
+                            response = f"🛑 **Access Forbidden (Semester / Tenant Boundary Violation):**\n\n{err_msg}"
                         else:
                             response = f"API Error: {res.text}"
                     except Exception as e:
@@ -372,6 +495,8 @@ def render_student_view():
         user_branch_id = user_profile.get("branch_id")
         user_semester = user_profile.get("semester")
         
+        is_student = str(user.get("role", "")).lower() == "student"
+
         col1, col2, col3 = st.columns(3)
         
         with col1:
@@ -382,27 +507,49 @@ def render_student_view():
                 except:
                     pass
             branch_options = {str(b["_id"]): b["branch_name"] for b in branches}
-            default_branch_index = 0
-            if user_branch_id and str(user_branch_id) in branch_options:
-                default_branch_index = list(branch_options.keys()).index(str(user_branch_id))
             
-            selected_branch_id = st.selectbox(
-                "Select Branch", 
-                options=list(branch_options.keys()), 
-                format_func=lambda x: branch_options[x], 
-                index=default_branch_index if branch_options else 0, 
-                key="mc_branch_select"
-            )
+            if is_student and user_branch_id and str(user_branch_id) in branch_options:
+                selected_branch_id = st.selectbox(
+                    "Branch (🔒 Enrolled)", 
+                    options=[str(user_branch_id)], 
+                    format_func=lambda x: branch_options.get(x, "Enrolled Branch"), 
+                    index=0, 
+                    disabled=True,
+                    help="Students are isolated to their registered branch curriculum.",
+                    key="mc_branch_select"
+                )
+            else:
+                default_branch_index = 0
+                if user_branch_id and str(user_branch_id) in branch_options:
+                    default_branch_index = list(branch_options.keys()).index(str(user_branch_id))
+                selected_branch_id = st.selectbox(
+                    "Select Branch", 
+                    options=list(branch_options.keys()), 
+                    format_func=lambda x: branch_options[x], 
+                    index=default_branch_index if branch_options else 0, 
+                    key="mc_branch_select"
+                )
             
         with col2:
-            semesters = [1, 2, 3, 4, 5, 6, 7, 8]
-            default_sem_index = semesters.index(user_semester) if user_semester in semesters else 0
-            selected_semester = st.selectbox(
-                "Select Semester", 
-                options=semesters, 
-                index=default_sem_index, 
-                key="mc_sem_select"
-            )
+            if is_student:
+                enrolled_sem = int(user_semester) if user_semester else 1
+                selected_semester = st.selectbox(
+                    "Semester (🔒 Enrolled)", 
+                    options=[enrolled_sem], 
+                    index=0, 
+                    disabled=True,
+                    help="Students are strictly isolated to their enrolled academic semester.",
+                    key="mc_sem_select"
+                )
+            else:
+                semesters = list(range(1, 11))
+                default_sem_index = semesters.index(user_semester) if user_semester in semesters else 0
+                selected_semester = st.selectbox(
+                    "Select Semester", 
+                    options=semesters, 
+                    index=default_sem_index, 
+                    key="mc_sem_select"
+                )
             
         with col3:
             courses = []
@@ -420,6 +567,10 @@ def render_student_view():
             )
             
         st.divider()
+
+        if is_student and user_semester and int(selected_semester) != int(user_semester):
+            st.error(f"🛑 **Cross-Semester Access Blocked:** You are registered for Semester {user_semester}. Access to Semester {selected_semester} course materials is forbidden.")
+            st.stop()
         
         if selected_course_code:
             docs = get_documents_by_course(selected_course_code)
@@ -455,6 +606,8 @@ def render_student_view():
         user_branch_id = user_profile.get("branch_id")
         user_semester = user_profile.get("semester")
         
+        is_student = str(user.get("role", "")).lower() == "student"
+        
         col1, col2 = st.columns(2)
         
         with col1:
@@ -465,28 +618,54 @@ def render_student_view():
                 except:
                     pass
             branch_options = {str(b["_id"]): b["branch_name"] for b in branches}
-            default_branch_index = 0
-            if user_branch_id and str(user_branch_id) in branch_options:
-                default_branch_index = list(branch_options.keys()).index(str(user_branch_id))
             
-            selected_branch_id = st.selectbox(
-                "Select Branch", 
-                options=list(branch_options.keys()), 
-                format_func=lambda x: branch_options[x], 
-                index=default_branch_index if branch_options else 0, 
-                key="pe_branch_select"
-            )
+            if is_student and user_branch_id and str(user_branch_id) in branch_options:
+                selected_branch_id = st.selectbox(
+                    "Branch (🔒 Enrolled)", 
+                    options=[str(user_branch_id)], 
+                    format_func=lambda x: branch_options.get(x, "Enrolled Branch"), 
+                    index=0, 
+                    disabled=True,
+                    help="Students are isolated to their registered branch curriculum.",
+                    key="pe_branch_select"
+                )
+            else:
+                default_branch_index = 0
+                if user_branch_id and str(user_branch_id) in branch_options:
+                    default_branch_index = list(branch_options.keys()).index(str(user_branch_id))
+                selected_branch_id = st.selectbox(
+                    "Select Branch", 
+                    options=list(branch_options.keys()), 
+                    format_func=lambda x: branch_options[x], 
+                    index=default_branch_index if branch_options else 0, 
+                    key="pe_branch_select"
+                )
             
         with col2:
-            semesters = [1, 2, 3, 4, 5, 6, 7, 8]
-            default_sem_index = semesters.index(int(user_semester)) if user_semester and int(user_semester) in semesters else 0
-            selected_semester = st.selectbox(
-                "Select Semester", 
-                options=semesters, 
-                index=default_sem_index, 
-                key="pe_sem_select"
-            )
+            if is_student:
+                enrolled_sem = int(user_semester) if user_semester else 1
+                selected_semester = st.selectbox(
+                    "Semester (🔒 Enrolled)", 
+                    options=[enrolled_sem], 
+                    index=0, 
+                    disabled=True,
+                    help="Students are strictly isolated to their enrolled academic semester.",
+                    key="pe_sem_select"
+                )
+            else:
+                semesters = list(range(1, 11))
+                default_sem_index = semesters.index(int(user_semester)) if user_semester and int(user_semester) in semesters else 0
+                selected_semester = st.selectbox(
+                    "Select Semester", 
+                    options=semesters, 
+                    index=default_sem_index, 
+                    key="pe_sem_select"
+                )
             
+        if is_student and user_semester and int(selected_semester) != int(user_semester):
+            st.error(f"🛑 **Cross-Semester Access Blocked:** You are registered for Semester {user_semester}. Access to Semester {selected_semester} practice exams is forbidden.")
+            st.stop()
+
         courses = []
         if selected_branch_id and selected_semester:
             try:
@@ -521,6 +700,7 @@ def render_student_view():
                         "course_code": selected_course,
                         "department_id": str(user_dept_id),
                         "branch_id": str(selected_branch_id),
+                        "semester": int(selected_semester),
                         "num_questions": int(selected_num_questions),
                         "difficulty": selected_difficulty.lower()
                     }
@@ -532,6 +712,13 @@ def render_student_view():
                     )
                     if res.status_code == 200:
                         quiz_data = res.json().get("exam")
+                    elif res.status_code == 403:
+                        quiz_data = None
+                        try:
+                            err_detail = res.json().get("detail", res.text)
+                        except Exception:
+                            err_detail = res.text
+                        st.error(f"🛑 Access Forbidden: {err_detail}")
                     else:
                         quiz_data = None
                         st.error(f"Failed to generate quiz: {res.text}")
@@ -546,7 +733,7 @@ def render_student_view():
                     st.session_state["quiz_difficulty"] = selected_difficulty
                     st.session_state["quiz_submitted"] = False
                     st.rerun()
-                else:
+                elif res.status_code != 403:
                     st.error("Failed to generate quiz. Please ensure documents are uploaded for this course.")
                     
         if st.session_state.get("current_quiz") and st.session_state.get("quiz_course") == selected_course:
@@ -558,17 +745,8 @@ def render_student_view():
                 for i, q in enumerate(quiz):
                     st.markdown(f"**Q{i+1}: {q['question']}**")
                     
-                    # Render reference image or diagram if provided
-                    img_val = q.get("image_url")
-                    if img_val:
-                        try:
-                            st.image(img_val, caption=f"Figure {i+1}: Reference Schematic", use_container_width=True)
-                        except Exception:
-                            st.markdown(f'<img src="{img_val}" style="max-width:100%; border-radius:8px; margin:8px 0; border:1px solid #e0e0e0;"/>', unsafe_allow_html=True)
-                            
-                    diagram_val = q.get("diagram")
-                    if diagram_val:
-                        st.code(diagram_val, language="text")
+                    # Render reference image, SVG graphic, or diagram if provided
+                    render_question_media(q, i)
                         
                     user_answers[i] = st.radio(f"Options for Q{i+1}", q.get('options', []), key=f"q_{i}", index=None, label_visibility="collapsed")
                     st.write("")
@@ -617,16 +795,8 @@ def render_student_view():
                 for i, q in enumerate(quiz):
                     st.markdown(f"**Q{i+1}: {q['question']}**")
                     
-                    img_val = q.get("image_url")
-                    if img_val:
-                        try:
-                            st.image(img_val, caption=f"Figure {i+1}: Reference Schematic", use_container_width=True)
-                        except Exception:
-                            st.markdown(f'<img src="{img_val}" style="max-width:100%; border-radius:8px; margin:8px 0; border:1px solid #e0e0e0;"/>', unsafe_allow_html=True)
-                            
-                    diagram_val = q.get("diagram")
-                    if diagram_val:
-                        st.code(diagram_val, language="text")
+                    # Render reference image, SVG graphic, or diagram if provided
+                    render_question_media(q, i)
                         
                     user_ans = st.session_state["user_answers"].get(i)
                     correct_ans = q.get('answer')
@@ -669,6 +839,32 @@ def render_student_view():
     elif nav_selection == "Settings":
         st.title("User Settings")
         
+        # Academic Profile & Semester Override for Viva / Demonstration
+        st.markdown("### 🎓 Academic Profile & Term Management")
+        branch_record = branches_col.find_one({"_id": user.get("branch_id")}) if user.get("branch_id") else None
+        b_name = branch_record.get("branch_name", "Assigned Branch") if branch_record else "MSc Cyber security"
+        current_sem = user.get("semester") or 1
+
+        st.info(
+            f"**Roll Number / User ID:** `{user.get('username')}`  \n"
+            f"**Student Name:** `{user.get('name')}`  \n"
+            f"**Registered Branch:** `{b_name}`  \n"
+            f"**Current Registered Semester:** **Semester {current_sem}**  \n\n"
+            "🔒 *Curriculum Policy:* Institutional IAM tenant boundary rules strictly restrict access to courses matching your enrolled academic semester."
+        )
+
+        with st.expander("🔄 Switch Registered Semester (Viva Demonstration / Evaluation Testing)", expanded=False):
+            st.caption("Administrators and examiners can switch the registered semester to test cross-semester isolation enforcement or evaluate specific course syllabi (e.g. Semester 3 Database Design 20XC34 vs. Semester 8 Cloud Security 20XC81).")
+            new_test_sem = st.selectbox("Select Target Academic Semester", list(range(1, 11)), index=(current_sem - 1) if current_sem in list(range(1, 11)) else 0, key="switch_sem_select")
+            if st.button("Apply Academic Semester", type="primary"):
+                from auth.session_manager import create_jwt
+                users_col.update_one({"username": user["username"]}, {"$set": {"semester": int(new_test_sem)}})
+                st.session_state["user"]["semester"] = int(new_test_sem)
+                st.session_state["token"] = create_jwt(st.session_state["user"])
+                st.success(f"Academic semester updated to Semester {new_test_sem}! Reloading curriculum...")
+                st.rerun()
+
+        st.divider()
         st.markdown("### Change Password")
         with st.form("change_password_form"):
             old_password = st.text_input("Current Password", type="password")

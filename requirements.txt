@@ -19,3 +19,5 @@ redis
 slowapi
 pyotp
 pytest
+pandas
+numpy

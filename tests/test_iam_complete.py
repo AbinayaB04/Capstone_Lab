@@ -93,20 +93,32 @@ def test_require_permission_dependency():
     assert check_ask_ai(student_user) == student_user
 
 def test_multi_tenant_isolation_enforcement():
-    """Verify student cross-tenant isolation enforcement."""
+    """Verify student cross-tenant and cross-semester isolation enforcement."""
     admin_user = {"username": "admin", "role": "admin"}
     student_user = {
         "username": "cse_student", 
         "role": "student",
         "department_id": "dept_cse",
-        "branch_id": "branch_aiml"
+        "branch_id": "branch_aiml",
+        "semester": 8
     }
 
-    # Admin can access anything
-    assert enforce_tenant_isolation(admin_user, requested_dept_id="dept_ece", requested_branch_id="branch_comm") is True
+    # Admin can access anything across departments, branches, semesters, and courses
+    assert enforce_tenant_isolation(
+        admin_user, 
+        requested_dept_id="dept_ece", 
+        requested_branch_id="branch_comm", 
+        requested_semester=3, 
+        requested_course_code="CS301"
+    ) is True
 
-    # Student accessing their own department and branch
-    assert enforce_tenant_isolation(student_user, requested_dept_id="dept_cse", requested_branch_id="branch_aiml") is True
+    # Student accessing their own department, branch, and enrolled semester (8)
+    assert enforce_tenant_isolation(
+        student_user, 
+        requested_dept_id="dept_cse", 
+        requested_branch_id="branch_aiml",
+        requested_semester=8
+    ) is True
 
     # Student trying to access another department -> 403 Forbidden
     with pytest.raises(HTTPException) as exc_info:
@@ -117,6 +129,24 @@ def test_multi_tenant_isolation_enforcement():
     with pytest.raises(HTTPException) as exc_info:
         enforce_tenant_isolation(student_user, requested_dept_id="dept_cse", requested_branch_id="branch_robotics")
     assert exc_info.value.status_code == 403
+
+    # Student enrolled in Sem 8 trying to access Sem 3 -> 403 Forbidden
+    with pytest.raises(HTTPException) as exc_info:
+        enforce_tenant_isolation(student_user, requested_semester=3)
+    assert exc_info.value.status_code == 403
+    assert "Cross-semester access forbidden" in str(exc_info.value.detail)
+
+    # Student enrolled in Sem 8 trying to access a Sem 3 course (CS301) -> 403 Forbidden
+    from database.mongo_manager import courses_col
+    courses_col.update_one(
+        {"course_code": "CS301"},
+        {"$set": {"course_code": "CS301", "course_name": "Data Structures", "branch_id": "branch_aiml", "semester_number": 3}},
+        upsert=True
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        enforce_tenant_isolation(student_user, requested_course_code="CS301")
+    assert exc_info.value.status_code == 403
+    assert "Cross-semester access forbidden" in str(exc_info.value.detail)
 
 def test_2fa_backup_recovery_codes_lifecycle():
     """Verify 2FA backup codes generation, consumption, and one-time use."""

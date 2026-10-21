@@ -256,13 +256,14 @@ def calculate_current_semester(enrollment_date, current_date=None) -> int:
         
     days_elapsed = max(0, (current_date - enrollment_date).days)
     terms_elapsed = int(days_elapsed // 182.5)
-    return min(9, terms_elapsed + 1)
+    return min(11, terms_elapsed + 1)
 
 def check_and_apply_auto_promotion(username: str, current_date=None) -> dict:
     """
     Evaluates time-based semester progression for a student (The Mover Phase).
     If student has elapsed into a new term and promotion_hold is False,
-    automatically advances the semester or transitions to Alumni if > 8.
+    automatically advances the semester or transitions to Alumni beyond max terms.
+    AMCS Department (5-year Integrated MSc) has 10 semesters; 4-year B.E. has 8.
     """
     import re
     user = users_col.find_one({"username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
@@ -276,8 +277,21 @@ def check_and_apply_auto_promotion(username: str, current_date=None) -> dict:
     enrollment = user.get("enrollment_date") or user.get("last_password_change")
     calculated_sem = calculate_current_semester(enrollment, current_date=current_date)
     
+    # Determine max terms: AMCS Department & 5-year Integrated MSc have 10 terms; standard B.E. has 8 terms
+    max_terms = 8
+    dept_id = user.get("department_id")
+    if dept_id:
+        d = departments_col.find_one({"_id": dept_id})
+        if d and "amcs" in d.get("dept_name", "").lower():
+            max_terms = 10
+    branch_id = user.get("branch_id")
+    if branch_id:
+        b = branches_col.find_one({"_id": branch_id})
+        if b and ("msc" in b.get("branch_name", "").lower() or "cyber" in b.get("branch_name", "").lower()):
+            max_terms = 10
+
     if calculated_sem > current_sem:
-        if calculated_sem <= 8:
+        if calculated_sem <= max_terms:
             users_col.update_one(
                 {"_id": user["_id"]},
                 {"$set": {"semester": calculated_sem}}
@@ -285,13 +299,13 @@ def check_and_apply_auto_promotion(username: str, current_date=None) -> dict:
             log_audit_action(username, "AUTO_PROMOTION_APPLIED", "system", f"Promoted from Sem {current_sem} to Sem {calculated_sem} (Time-Based)")
             return {"promoted": True, "new_semester": calculated_sem, "status": "active"}
         else:
-            # Beyond semester 8: transition to Alumni (The Leaver Phase)
+            # Beyond max terms: transition to Alumni (The Leaver Phase)
             users_col.update_one(
                 {"_id": user["_id"]},
-                {"$set": {"semester": 8, "status": "alumni"}}
+                {"$set": {"semester": max_terms, "status": "alumni"}}
             )
-            log_audit_action(username, "TENURE_COMPLETED_ALUMNI", "system", "Student completed 8 semesters; transitioned to Alumni")
-            return {"promoted": True, "new_semester": 8, "status": "alumni"}
+            log_audit_action(username, "TENURE_COMPLETED_ALUMNI", "system", f"Student completed {max_terms} semesters; transitioned to Alumni")
+            return {"promoted": True, "new_semester": max_terms, "status": "alumni"}
             
     return {"promoted": False, "current_semester": current_sem}
 

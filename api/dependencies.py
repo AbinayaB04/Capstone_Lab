@@ -90,13 +90,16 @@ def require_role(allowed_roles: list) -> Callable:
 def enforce_tenant_isolation(
     user: dict, 
     requested_dept_id: Optional[str] = None, 
-    requested_branch_id: Optional[str] = None
+    requested_branch_id: Optional[str] = None,
+    requested_course_code: Optional[str] = None,
+    requested_semester: Optional[int] = None
 ) -> bool:
     """
-    Validates that a user is not performing a cross-tenant privilege escalation.
-    - Admin: Global access across all departments and branches.
+    Validates that a user is not performing a cross-tenant or cross-semester privilege escalation.
+    - Admin: Global access across all departments, branches, courses, and semesters.
     - Staff / Dept Admin: Scoped to their own department.
-    - Student: Strictly scoped to their own department and branch.
+    - Student: Strictly scoped to their own department, branch, and enrolled semester.
+               Students CANNOT access or query materials/courses from other semesters.
     """
     role = str(user.get("role", "")).lower()
     
@@ -105,7 +108,9 @@ def enforce_tenant_isolation(
         
     user_dept = str(user.get("department_id") or "")
     user_branch = str(user.get("branch_id") or "")
+    user_sem = user.get("semester")
     
+    # 1. Department Isolation Check
     if requested_dept_id:
         req_dept_str = str(requested_dept_id)
         if user_dept and user_dept != req_dept_str:
@@ -114,12 +119,51 @@ def enforce_tenant_isolation(
                 detail="Cross-tenant access forbidden: You cannot access materials outside your department."
             )
             
-    if role == "student" and requested_branch_id:
-        req_branch_str = str(requested_branch_id)
-        if user_branch and user_branch != req_branch_str:
-            raise HTTPException(
-                status_code=403, 
-                detail="Cross-tenant access forbidden: Students can only access materials for their assigned branch."
-            )
+    # 2. Student-Specific Branch and Semester Boundary Enforcement
+    if role == "student":
+        # Check Branch Isolation
+        if requested_branch_id:
+            req_branch_str = str(requested_branch_id)
+            if user_branch and user_branch != req_branch_str:
+                raise HTTPException(
+                    status_code=403, 
+                    detail="Cross-tenant access forbidden: Students can only access materials for their assigned branch."
+                )
+
+        # Check Requested Semester Isolation
+        if requested_semester is not None and user_sem is not None:
+            try:
+                if int(requested_semester) != int(user_sem):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Cross-semester access forbidden: You are enrolled in Semester {user_sem} and cannot access Semester {requested_semester} materials."
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        # Check Course Code Semester and Branch Mapping
+        if requested_course_code:
+            from database.mongo_manager import courses_col
+            course = courses_col.find_one({"course_code": str(requested_course_code).upper().strip()})
+            if course:
+                # Enforce course branch restriction
+                course_branch = str(course.get("branch_id") or "")
+                if user_branch and course_branch and user_branch != course_branch:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Cross-tenant access forbidden: Course '{requested_course_code}' belongs to another branch."
+                    )
+                # Enforce course semester restriction
+                course_sem = course.get("semester_number")
+                if course_sem is not None and user_sem is not None:
+                    try:
+                        if int(course_sem) != int(user_sem):
+                            raise HTTPException(
+                                status_code=403,
+                                detail=f"Cross-semester access forbidden: Course '{requested_course_code}' is taught in Semester {course_sem}, but you are enrolled in Semester {user_sem}."
+                            )
+                    except (ValueError, TypeError):
+                        pass
             
     return True
+

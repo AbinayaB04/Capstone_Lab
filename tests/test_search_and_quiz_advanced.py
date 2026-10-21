@@ -53,18 +53,20 @@ def test_no_relevant_documents_fallback_flow():
     assert len(res.get("sources", [])) >= 1
 
 def test_complex_quiz_structure_with_diagram_and_image():
-    """Verify complex quiz question format with diagram and image_url keys."""
+    """Verify complex quiz question format with diagram, image_svg, and image_url keys."""
     sample_complex_quiz = [
         {
-            "question": "Analyze the dependency diagram below. Which normal form is violated?",
-            "diagram": "A -> B, B -> C (Transitive dependency)",
+            "question": "Analyze the entity-relationship schema below. Which cardinal relationship is represented?",
+            "image_svg": "<svg viewBox='0 0 500 140' xmlns='http://www.w3.org/2000/svg'><rect x='20' y='30' width='140' height='70'/></svg>",
+            "diagram": "Entity A [1] ----< M >---- [N] Entity B",
             "image_url": "https://example.com/schema.png",
-            "options": ["1NF", "2NF", "3NF", "BCNF"],
-            "answer": "3NF",
-            "explanation": "Transitive dependency B -> C violates Third Normal Form (3NF)."
+            "options": ["One-to-One", "One-to-Many", "Many-to-Many", "Unary"],
+            "answer": "Many-to-Many",
+            "explanation": "The relationship diamond indicates an M:N cardinal connectivity."
         },
         {
             "question": "In a B-tree of order 4, what happens when a node overflows?",
+            "image_svg": None,
             "diagram": "[ 10 | 20 | 30 | 40 ] -> Split",
             "image_url": None,
             "options": ["Node splits into two and median promotes", "Node is deleted", "Underflow error", "Data is compressed"],
@@ -80,6 +82,14 @@ def test_complex_quiz_structure_with_diagram_and_image():
         assert "explanation" in q and len(q["explanation"]) > 10
         assert "diagram" in q
         assert "image_url" in q
+        assert "image_svg" in q
+
+    # Verify dynamic SVG diagram card generation for questions with text/ASCII diagrams
+    from views.student_view import generate_svg_diagram_card
+    svg_output = generate_svg_diagram_card(sample_complex_quiz[1]["diagram"], title="B-Tree Overflow")
+    assert "<svg" in svg_output and "</svg>" in svg_output
+    assert "B-Tree Overflow" in svg_output
+    assert "Split" in svg_output
 
 def test_query_request_schema_with_rich_chat_history():
     """Verify that QueryRequest accepts chat_history containing nested sources lists."""

@@ -192,6 +192,11 @@ def render_admin_view():
                     options=list(branch_options.keys()),
                     format_func=lambda x: branch_options[x]
                 )
+                selected_semester = st.selectbox(
+                    "Initial Enrolled Semester",
+                    options=list(range(1, 11)),
+                    index=0
+                )
             
         st.write("")
         submit_btn = st.button(f"Register {role}", type="primary")
@@ -277,7 +282,7 @@ def render_admin_view():
                         enrollment = target_doc.get("enrollment_date")
                         calc_sem = calculate_current_semester(enrollment)
                         st.info(f"🎓 **Student:** {selected_uid} | **Current Sem:** {curr_sem} | **Time-Based Calculated Sem:** {calc_sem}")
-                        new_sem_input = st.selectbox("Select Target Semester", [1, 2, 3, 4, 5, 6, 7, 8], index=min(7, curr_sem if curr_sem < 8 else 7))
+                        new_sem_input = st.selectbox("Select Target Semester", list(range(1, 11)), index=min(9, max(0, (curr_sem - 1) if curr_sem else 0)))
                         if st.button("Promote Student Semester", type="primary"):
                             if promote_student_semester(selected_uid, new_sem_input):
                                 st.success(f"Successfully promoted {selected_uid} to Semester {new_sem_input}!")
@@ -419,7 +424,7 @@ def render_admin_view():
                 col_c1, col_c2 = st.columns(2)
                 with col_c1:
                     c_branch = st.selectbox("Branch", options=list(branch_opts.keys()), format_func=lambda x: branch_opts[x], key="c_add_branch")
-                    c_sem = st.selectbox("Semester", options=list(range(1, 9)), key="c_add_sem")
+                    c_sem = st.selectbox("Semester", options=list(range(1, 11)), key="c_add_sem")
                 with col_c2:
                     c_code = st.text_input("Course Code (e.g. CS601)", key="c_add_code")
                     c_name = st.text_input("Course Name (e.g. Cloud Computing)", key="c_add_name")

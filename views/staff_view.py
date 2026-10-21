@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 from streamlit_option_menu import option_menu
-from auth.session_manager import logout_user
+from auth.session_manager import logout_user, get_auth_headers
 from utils.image_utils import get_base64_of_bin_file
 import threading
 import uuid
@@ -64,6 +64,8 @@ from bson.objectid import ObjectId
 import uuid
 
 def render_staff_view():
+    if "ingestion_tasks" not in st.session_state:
+        st.session_state.ingestion_tasks = {}
     user = st.session_state.get("user", {})
     from auth.rbac_manager import RBACManager
     if not RBACManager.has_permission(user.get("role"), "upload_materials"):
@@ -207,7 +209,7 @@ def render_staff_view():
     with col2:
         selected_semester = st.selectbox(
             "Select Semester",
-            options=[1, 2, 3, 4, 5, 6, 7, 8],
+            options=list(range(1, 11)),
             key="staff_sem_select"
         )
         
@@ -257,9 +259,12 @@ def render_staff_view():
                         "role": user_profile.get("role", "staff")
                     }
                     try:
-                        res = requests.post(f"{API_BASE_URL}/documents/upload", files=files_to_upload, data=data)
+                        res = requests.post(f"{API_BASE_URL}/documents/upload", files=files_to_upload, data=data, headers=get_auth_headers())
                         if res.status_code == 200:
                             st.success(f"Queued {len(uploaded_files)} document(s) for background processing!")
+                            tasks = st.session_state.setdefault("ingestion_tasks", {})
+                            for f in uploaded_files:
+                                tasks[f.name] = "Queued in background"
                         else:
                             st.error(f"Failed to upload: {res.text}")
                     except Exception as e:
@@ -270,16 +275,17 @@ def render_staff_view():
         # Display background tasks status
         st.divider()
         st.subheader("Background Tasks")
-        if not st.session_state.ingestion_tasks:
+        tasks = st.session_state.get("ingestion_tasks", {})
+        if not tasks:
             st.info("No active or recent background tasks.")
         else:
-            for tid, status in st.session_state.ingestion_tasks.items():
+            for tid, status in tasks.items():
                 if status == "Completed":
-                    st.success(f"Task {tid[:8]}: {status}")
+                    st.success(f"Task {tid[:24]}: {status}")
                 elif status.startswith("Failed"):
-                    st.error(f"Task {tid[:8]}: {status}")
+                    st.error(f"Task {tid[:24]}: {status}")
                 else:
-                    st.info(f"Task {tid[:8]}: {status} 🔄")
+                    st.info(f"Task {tid[:24]}: {status} 🔄")
                     
         # Document Management
         st.divider()
@@ -288,7 +294,7 @@ def render_staff_view():
         API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8002")
         docs = []
         try:
-            res = requests.get(f"{API_BASE_URL}/documents/course/{selected_course_code}")
+            res = requests.get(f"{API_BASE_URL}/documents/course/{selected_course_code}", headers=get_auth_headers())
             if res.status_code == 200:
                 docs = res.json().get("documents", [])
         except:
@@ -304,7 +310,7 @@ def render_staff_view():
                 with col2:
                     if st.button("Delete", key=f"del_{doc['_id']}"):
                         try:
-                            del_res = requests.delete(f"{API_BASE_URL}/documents/{doc['_id']}")
+                            del_res = requests.delete(f"{API_BASE_URL}/documents/{doc['_id']}", headers=get_auth_headers())
                             if del_res.status_code == 200:
                                 st.success(f"Deleted {doc['filename']}")
                                 st.rerun()

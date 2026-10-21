@@ -104,10 +104,32 @@ To verify the test suite:
 ```bash
 pytest tests
 ```
-This runs 10 test suites covering:
+This runs 25 automated tests across 6 suites covering:
+- **5-Phase IAM Lifecycle (JMLC)** (Joiner, Active, Maintainer, Mover, Leaver)
 - **Role-Based Access Control (RBAC)** permissions
-- **Password Complexity & Strength** validation
+- **Password Complexity, History & Expiration** validation
 - **JWT Authentication & Lifecycle**
-- **Two-Factor Authentication (2FA / TOTP)** verification
+- **Two-Factor Authentication (2FA / TOTP) & Recovery Codes**
 - **Curriculum Management CRUD** (Departments, Branches, Courses)
-- **Exam Scoring & Persistence**
+- **Exam Generation, Diagrams & Scoring**
+- **Search Typo Auto-Correction & Internet Fallback Citations**
+
+---
+
+## 🔑 Pre-Seeded Demo Credentials
+
+For academic evaluation and quick testing, the database includes pre-configured personas:
+
+| Persona | Username / Rollno | Password | Role / Access Scope | Key Demonstration Features |
+| :--- | :--- | :--- | :--- | :--- |
+| **Super Admin** | `admin` | `pass` | `admin` (Global Scope) | IAM Governance, Academic Holds, User Unlock, Curriculum CRUD |
+| **Faculty / Staff** | `staff1` | `pass` | `staff` (CS Department) | Lecture Note Upload (PDF/PPTX), Vector Sync, Knowledge Base |
+| **Student (CSE)** | `test` | `1234` | `student` (Sem 5, CSE) | Transparent RAG Chat, Course Material Downloads |
+| **Student (Cyber)** | `22PC17` | `Password@123` *(or reset)* | `student` (MSc Cyber Security) | AI Practice Exams with ASCII Diagrams, 6-Month Auto-Promotion |
+
+---
+
+## 📚 Capstone Academic Deliverables
+
+* 📖 **[Comprehensive Capstone Project Report](CAPSTONE_FINAL_REPORT.md)**: Full academic whitepaper with architecture diagrams, threat models, RAG/IAM module specifications, and latency benchmarks.
+* 🎯 **[Live Viva & Demonstration Defense Guide](VIVA_DEMO_GUIDE.md)**: Step-by-step 5-minute evaluation walkthrough script with anticipated examiner Q&A.
